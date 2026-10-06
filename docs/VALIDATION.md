@@ -16,8 +16,19 @@ No "X% accurate". Correctness is shown by tests that can fail.
 | Econ | `net = gross − flash − gas − builder` | exact identity | ✅ |
 | Econ | No USD without an observed price | USD = nil | ✅ |
 | Lifecycle | No stage skipping; rejected can't advance | error | ✅ |
-| **State** | Reconstructed reserves at block N == `getReserves()` at N via archive `eth_call` | 0 wei diff | Phase 3 |
-| **Tx replay** | For historical V2 swaps: our `getAmountOut` on reconstructed state == amount in `Swap` log | 0 wei diff | Phase 3 |
+| Keccak | `""`, `"abc"`, ERC-20 Transfer topic | bit-exact | ✅ |
+| ABI | PairCreated / Sync / Swap topic0 = keccak(signature); getReserves selector | exact | ✅ |
+| ABI | uint112 overflow, short data, dirty address words rejected | error | ✅ |
+| Ingest | provider range/result limits → adaptive split | same data | ✅ devnet |
+| Ingest | crash after 3 / 12 / 40 calls, then resume | db-hash == clean run | ✅ devnet |
+| Ingest | different span / workers / chunk sizes | identical db-hash | ✅ devnet |
+| Ingest | end block not final | refused | ✅ |
+| Ingest | event tx hash == block body tx at that index | error on mismatch | ✅ |
+| **State** | end-of-block reserves == truth for EVERY (pool, block) | 0 wei | ✅ devnet (628 pairs) |
+| **State** | before/after tx i uses only Syncs from txs < i / ≤ i | exact | ✅ devnet |
+| **State** | Reconstructed reserves == archive `getReserves()` | 0 wei diff | ✅ devnet · ⏳ **mainnet: run `mevsim validate`** |
+| Validator | catches 1-wei node disagreement, wrong fee (25 vs 30 bps), missing block, broken parent link | FAIL reported | ✅ |
+| **Tx replay** | Every V2 Swap: Sync = pre+in−out; contract K-check with factory fee; exact-out rate | 0 violations | ✅ devnet · ⏳ mainnet |
 | **Arb replay** | Known arb txs: route, input, output, gas reproduced | output 0 wei diff; gas within fork-measured | Phase 4 |
 | **Fork** | Execute our route on an anvil fork at block N, tx index i | on-chain out == simulated out | Phase 4 |
 | Regression | Every bug → new test in `testdata/regressions/` | — | ongoing |

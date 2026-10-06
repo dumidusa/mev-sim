@@ -56,12 +56,15 @@ uses spot prices and is allowed to be wrong; nothing downstream trusts it.
 | `internal/lifecycle` | Stage machine + reject reasons | DONE |
 | `internal/engine` | Evaluate one route at one snapshot | DONE |
 | `internal/scenario` | Reproducible JSON snapshot experiments | DONE |
-| `internal/ingest` | Archive data → store | Phase 2 |
-| `internal/store` | SQLite now, Parquet/Postgres later behind an interface | Phase 2 |
-| `internal/state` | Pool state at (block, txIndex) | Phase 3 |
+| `internal/keccak` | Keccak-256 for topics/selectors | DONE |
+| `internal/eth` (+`ethtest`) | JSON-RPC client; deterministic fake node | DONE |
+| `internal/uniswapv2` | PairCreated/Sync/Swap/getReserves ABI | DONE |
+| `internal/ingest` | 5-stage resumable ingestion | DONE |
+| `internal/store` | SQLite, idempotent, db-hash | DONE |
+| `internal/v2state` | Exact reserves at (block, txIndex), replayer, snapshots | DONE |
 | `internal/scan` | Token graph, bounded cycle search | Phase 3 |
 | `internal/replay` | `--start-block/--end-block` loop | Phase 3 |
-| `internal/validate` | Real-tx reproduction harness | Phase 4 |
+| `internal/validate` | Phase 2 checks incl. archive getReserves; real-arb reproduction in Phase 4 | PARTIAL |
 | `contracts/` | Solidity executor for fork validation (Foundry) | Phase 4 |
 | `research/` | Python notebooks / reports | Phase 5 |
 
@@ -92,7 +95,7 @@ candidate with `unsupported_protocol`; it never silently approximates.
 
 ## 4. Data model (target, Phase 2–3)
 
-See `docs/schema.sql`. Core tables:
+Phase 2 tables live in `internal/store/store.go` (see `docs/PHASE2_DESIGN.md` §6). Long-term target: `docs/schema.sql`. Core tables:
 
 ```
 blocks(number PK, hash, timestamp, base_fee_wei, gas_limit, gas_used, tx_count, miner)
@@ -141,7 +144,7 @@ Addresses used later (verify on Etherscan before use): WETH
 | Phase | Dependency | Why |
 |---|---|---|
 | 1 | Go stdlib only | math core must have no hidden behaviour |
-| 2 | `github.com/ethereum/go-ethereum` | RPC client, types, ABI decoding |
-| 2 | `modernc.org/sqlite` (pure Go) | research DB, no CGO |
+| 2 | own minimal JSON-RPC + Keccak (stdlib) | small, auditable; go-ethereum not needed yet |
+| 2 | `github.com/mattn/go-sqlite3` (CGO) | research DB; needs a C compiler (Xcode CLT on Mac) |
 | 4 | Foundry (`anvil`, `forge`) | fork execution: real gasUsed, real revert checks |
 | 5 | Python: pandas, pyarrow, duckdb, matplotlib | analysis, Parquet |

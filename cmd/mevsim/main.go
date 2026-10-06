@@ -15,9 +15,14 @@ import (
 
 func usage() {
 	fmt.Fprintln(os.Stderr, `usage:
-  mevsim evaluate --scenario FILE [--curve N]   evaluate routes on one state snapshot
-  mevsim status                                  what is implemented / not
-  mevsim replay ...                              NOT IMPLEMENTED (Phase 3)`)
+  mevsim evaluate --scenario FILE [--curve N]     evaluate routes on one state snapshot
+  mevsim ingest --start-block N --end-block M      historical V2 ingestion (resumable)
+  mevsim validate [--samples N] [--offline]        prove reconstruction vs archive node
+  mevsim reserves --pool 0x.. --block N [--tx-index i]
+  mevsim db-stats | db-hash                        inspect / fingerprint the database
+  mevsim devnet [--port 8545]                      local fake node for trying the pipeline
+  mevsim status                                    what is implemented / not
+  mevsim replay ...                                NOT IMPLEMENTED (Phase 3)`)
 	os.Exit(2)
 }
 
@@ -35,12 +40,24 @@ func main() {
 			usage()
 		}
 		os.Exit(evaluate(*path, *curve))
+	case "ingest":
+		os.Exit(cmdIngest(os.Args[2:]))
+	case "validate":
+		os.Exit(cmdValidate(os.Args[2:]))
+	case "reserves":
+		os.Exit(cmdReserves(os.Args[2:]))
+	case "db-stats":
+		os.Exit(cmdStats(os.Args[2:]))
+	case "db-hash":
+		os.Exit(cmdHash(os.Args[2:]))
+	case "devnet":
+		os.Exit(cmdDevnet(os.Args[2:]))
 	case "status":
 		printStatus()
 	case "replay":
 		fmt.Println("replay: NOT IMPLEMENTED.")
-		fmt.Println("Needs Phase 2 (historical ingestion: blocks, Sync/Swap logs, pool registry) and")
-		fmt.Println("Phase 3 (per-tx-index state replay, ETH/USD at block). See docs/ROADMAP.md.")
+		fmt.Println("Phase 2 (ingestion + exact V2 state at any (block, txIndex)) is done.")
+		fmt.Println("Needs Phase 3: cycle search per position, ETH/USD at block, results DB. See docs/ROADMAP.md.")
 		os.Exit(1)
 	default:
 		usage()
@@ -48,7 +65,7 @@ func main() {
 }
 
 // eth formats wei as ETH with 6 decimals, exact (no float).
-func eth(w *big.Int) string {
+func fmtETH(w *big.Int) string {
 	if w == nil {
 		return "n/a"
 	}
@@ -57,7 +74,7 @@ func eth(w *big.Int) string {
 }
 
 func line(label string, v econ.Value) {
-	fmt.Printf("  %-22s %16s ETH   [%s] %s\n", label, eth(v.Wei), v.Source, v.Note)
+	fmt.Printf("  %-22s %16s ETH   [%s] %s\n", label, fmtETH(v.Wei), v.Source, v.Note)
 }
 
 func evaluate(path string, curvePts int) int {
@@ -88,7 +105,7 @@ func evaluate(path string, curvePts int) int {
 			}
 			for _, p := range res.Curve {
 				if p.Err != nil {
-					fmt.Printf("  L=%14s  REVERT %v\n", eth(p.L), p.Err)
+					fmt.Printf("  L=%14s  REVERT %v\n", fmtETH(p.L), p.Err)
 					continue
 				}
 				n := 0
@@ -104,7 +121,7 @@ func evaluate(path string, curvePts int) int {
 				if p.Profit.Sign() < 0 {
 					ch = "-"
 				}
-				fmt.Printf("  L=%14s  %14s  %s\n", eth(p.L), eth(p.Profit), strings.Repeat(ch, n))
+				fmt.Printf("  L=%14s  %14s  %s\n", fmtETH(p.L), fmtETH(p.Profit), strings.Repeat(ch, n))
 			}
 			fmt.Printf("  (%d optimiser evaluations)\n", res.OptEvals)
 		}
@@ -113,7 +130,7 @@ func evaluate(path string, curvePts int) int {
 			fmt.Println("\n  Swaps at L* (state mutates hop by hop):")
 			for j, s := range res.Sim.Steps {
 				fmt.Printf("   %d. %s %s -> %s %s\n      before: %s\n      after:  %s\n",
-					j+1, eth(s.AmountIn), s.Hop.TokenIn, eth(s.AmountOut), s.Hop.TokenOut, s.StateBefore, s.StateAfter)
+					j+1, fmtETH(s.AmountIn), s.Hop.TokenIn, fmtETH(s.AmountOut), s.Hop.TokenOut, s.StateBefore, s.StateAfter)
 			}
 		}
 		if b := res.Breakdown; b != nil {
@@ -159,7 +176,9 @@ func printStatus() {
 		{"Optimal loan size L* + profit curve", "IMPLEMENTED (validated vs closed form)"},
 		{"Cost breakdown with provenance labels", "IMPLEMENTED"},
 		{"Lifecycle state machine + reject reasons", "IMPLEMENTED"},
-		{"Historical ingestion (blocks, logs, pools)", "NOT IMPLEMENTED (Phase 2)"},
+		{"Historical ingestion (pools, Sync/Swap, blocks, txs, receipts)", "IMPLEMENTED (Phase 2) - validate on real RPC"},
+		{"V2 reserves at any (block, txIndex)", "IMPLEMENTED (Phase 2) - exact via Sync replay"},
+		{"Validation vs archive getReserves()", "IMPLEMENTED (Phase 2)"},
 		{"Historical replay --start/--end", "NOT IMPLEMENTED (Phase 3)"},
 		{"ETH/USD at block", "NOT IMPLEMENTED (Phase 3)"},
 		{"Cycle search (graph, multi-hop)", "NOT IMPLEMENTED (Phase 3); engine already supports N hops"},
