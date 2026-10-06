@@ -1,0 +1,26 @@
+{
+  "label": "SYNTHETIC",
+  "source": "Hand-made reserves to exercise the engine. NOT historical data. No conclusions about real profitability may be drawn from it.",
+  "weth": "0xweth",
+  "block": {
+    "number": 0,
+    "base_fee_wei": "20000000000",
+    "gas_limit": 30000000,
+    "eth_usd": ""
+  },
+  "pools": [
+    {"address": "0xpoolA", "protocol": "uniswap_v2", "token0": "0xweth", "token1": "0xusdc",
+     "reserve0": "10000000000000000000000", "reserve1": "20000000000000000000000000", "fee_bps": 30},
+    {"address": "0xpoolB", "protocol": "sushiswap", "token0": "0xweth", "token1": "0xusdc",
+     "reserve0": "5000000000000000000000", "reserve1": "10200000000000000000000000", "fee_bps": 30}
+  ],
+  "routes": [
+    [["0xpoolB", "0xweth", "0xusdc"], ["0xpoolA", "0xusdc", "0xweth"]],
+    [["0xpoolA", "0xweth", "0xusdc"], ["0xpoolB", "0xusdc", "0xweth"]]
+  ],
+  "flash_loan": {"provider": "aave_v3", "fee": "5", "max_liquidity_wei": "100000000000000000000000"},
+  "gas": {"scenario": "competitive", "gas_used": 250000, "priority_fee_wei": "2000000000"},
+  "builder_share_bps": 9000,
+  "min_profit_wei": "0",
+  "max_loan_wei": "1000000000000000000000"
+}
