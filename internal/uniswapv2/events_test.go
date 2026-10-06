@@ -22,8 +22,11 @@ func TestTopicsAreKeccakOfSignatures(t *testing.T) {
 			t.Errorf("%s: keccak=%s const=%s", sig, got, c)
 		}
 	}
-	if sel := k("getReserves()")[:10]; sel != SelGetReserves {
-		t.Errorf("getReserves selector %s != %s", sel, SelGetReserves)
+	for sig, sel := range map[string]string{"getReserves()": SelGetReserves, "factory()": SelFactory,
+		"token0()": SelToken0, "token1()": SelToken1} {
+		if got := k(sig)[:10]; got != sel {
+			t.Errorf("%s selector %s != %s", sig, got, sel)
+		}
 	}
 }
 

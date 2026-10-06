@@ -20,8 +20,10 @@ A phase is not "done" until its validation rows in VALIDATION.md pass.
   reachable from the build workspace). Run `ingest` + `validate` on mainnet.
 - Fee-on-transfer / rebasing tokens are not flagged yet (planned: compare ERC-20
   Transfer amounts with Swap amountIn; Phase 3).
-- Pools from V2 forks other than Uniswap V2 / SushiSwap are counted as
-  `unknown_emitters`, not modelled.
+- Pools from V2 forks other than Uniswap V2 / SushiSwap are probed and listed
+  (`probes`, `validate` output), not modelled.
+- Pools with zero activity in the range are not discovered (constant reserves,
+  could be stale-price arb legs). Needs an optional full-history discovery mode.
 - Only V2-style pools. V3 is NOT IMPLEMENTED (no approximation used instead).
 - gasUsed is an assumption until Phase 4 fork measurement.
 - Only WETH-start routes are priced; others are rejected `no_price_source`.

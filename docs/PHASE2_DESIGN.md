@@ -36,7 +36,8 @@ Scope: Uniswap V2-style pools only. No V3, no competition, no Monte Carlo, no UI
 
 | Data | Method | Node type |
 |---|---|---|
-| Pool list | `eth_getLogs` PairCreated, address = factory | full |
+| Pools created in range | `eth_getLogs` PairCreated, address = factory, [start, end] | full |
+| Pools that existed before | `eth_call` factory/token0/token1 at start−1 | **archive** |
 | Sync / Swap | `eth_getLogs` topic0 ∈ {Sync, Swap}, **no address filter** | full |
 | Block header, tx order, tx fields | `eth_getBlockByNumber(n, true)` | full |
 | gasUsed, effectiveGasPrice, status | `eth_getBlockReceipts(n)` | full |
@@ -79,14 +80,27 @@ ReservesAt(P, B, txIndex=3) = Sync emitted in tx2
 ReservesEndOfBlock(P, B)    = Sync in tx4 = getReserves() at block tag B
 ```
 
-## 4. Pool discovery
+## 4. Pool discovery (revised after the first mainnet run)
 
-- `PairCreated(token0 indexed, token1 indexed, pair, allPairsLength)` from each
-  configured factory, from its deploy block to `end`.
-- The factory fixes the fee (Uniswap V2 = 30 bps, SushiSwap = 30 bps).
-  The swap K-check (§7) **tests** this assumption per pool.
-- Sync/Swap logs from contracts that are NOT in the registry (other V2 forks)
-  are counted in `unknown_emitters`. This is a coverage metric, not silently dropped.
+The first design scanned `PairCreated` from each factory's deploy block (2020)
+to `end`: about 10M blocks. On a provider with a small `eth_getLogs` range
+limit, that is hundreds of thousands of calls. Revised:
+
+```
+S2  PairCreated logs, ONLY in [start, end]      → pools created in range (exact position)
+S3  Sync/Swap logs by topic in [start, end]
+      new emitter?  → eth_call factory(), token0(), token1() at start−1 (archive)
+         factory ∈ configured    → register pool (discovered_by = probe, created "before start")
+         other factory           → probes.status = other_factory (fork, counted, not modelled)
+         revert / no code / bad  → probes.status = not_v2_pair
+```
+
+- Cost scales with **activity in the range**, not with chain history.
+- Every probe verdict is stored (`probes` table). Nothing is dropped silently.
+- `validate` lists the busiest untracked factories, which tells us which fork to add next.
+- **Limitation:** a pool with zero Sync events in the whole range is not discovered.
+  Its reserves are constant there, so it can still be an arbitrage leg (a stale price).
+  This needs a separate full-history discovery mode. It is listed in ROADMAP.
 
 ## 5. Seeding
 

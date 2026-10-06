@@ -75,7 +75,9 @@ type Chain struct {
 	receipts map[uint64][]eth.Receipt
 	logs     []eth.Log
 	history  map[string][]resPoint // pool -> end-of-block reserves
-	created  map[string]uint64     // pool -> creation block
+	created  map[string]uint64     // pool -> creation block (tracked factories)
+	pairMeta map[string][3]string  // pool -> factory, token0, token1 (incl. fork pool)
+	codeFrom map[string]uint64     // pool -> first block with code
 
 	mu sync.Mutex
 	// Limits that mimic providers.
@@ -84,7 +86,12 @@ type Chain struct {
 	// Fault injection: pool -> block where eth_call returns r0+1.
 	WrongReserves map[string]uint64
 	Calls         map[string]int
+	// MinLogFrom is the smallest fromBlock any eth_getLogs asked for.
+	MinLogFrom uint64
 }
+
+// ForkFactory is the factory of the untracked "other fork" pool.
+var ForkFactory = addr(0xF9)
 
 func addr(n uint64) string {
 	b := make([]byte, 20)
@@ -100,7 +107,8 @@ func hash(parts ...any) string {
 func Generate(cfg GenConfig) *Chain {
 	rng := rand.New(rand.NewSource(cfg.Seed))
 	c := &Chain{cfg: cfg, receipts: map[uint64][]eth.Receipt{}, history: map[string][]resPoint{},
-		created: map[string]uint64{}, WrongReserves: map[string]uint64{}, Calls: map[string]int{}}
+		created: map[string]uint64{}, WrongReserves: map[string]uint64{}, Calls: map[string]int{},
+		pairMeta: map[string][3]string{}, codeFrom: map[string]uint64{}, MinLogFrom: ^uint64(0)}
 	tokens := []string{addr(0xA1), addr(0xA2), addr(0xA3), addr(0xA4), addr(0xA5)}
 	var pools []*pool
 	nextPool := uint64(0xB000)
@@ -118,6 +126,8 @@ func Generate(cfg GenConfig) *Chain {
 	if cfg.UnknownPool {
 		unknown = &pool{addr: addr(0xDEAD), t0: tokens[0], t1: tokens[1], fee: 30,
 			r0: e18(1000), r1: e18(2_000_000)}
+		c.pairMeta[unknown.addr] = [3]string{ForkFactory, unknown.t0, unknown.t1}
+		c.codeFrom[unknown.addr] = cfg.FirstBlock
 	}
 
 	for bi := 0; bi < cfg.NumBlocks; bi++ {
@@ -207,6 +217,8 @@ func Generate(cfg GenConfig) *Chain {
 			emit(r, f.Address, []string{uniswapv2.TopicPairCreated, uniswapv2.AddrTopic(t0), uniswapv2.AddrTopic(t1)},
 				uniswapv2.EncodePairCreated(p.addr, pairCount[f.Address]))
 			c.created[p.addr] = num
+			c.pairMeta[p.addr] = [3]string{f.Address, t0, t1}
+			c.codeFrom[p.addr] = num
 			pools = append(pools, p)
 			_, r = newTx()
 			p.r0 = e18(int64(100 + rng.Intn(10_000)))
@@ -405,8 +417,22 @@ func (c *Chain) dispatch(req rpcReq) (any, *eth.RPCError) {
 		json.Unmarshal(req.Params[0], &call)
 		n := qty(str(1))
 		to := strings.ToLower(call.To)
+		cf, hasCode := c.codeFrom[to]
+		if !hasCode || n < cf {
+			return "0x", nil // no code at that block -> empty return, like a real node
+		}
+		if m, ok := c.pairMeta[to]; ok {
+			switch call.Data {
+			case uniswapv2.SelFactory:
+				return eth.Hex(uniswapv2.AddrWord(m[0])), nil
+			case uniswapv2.SelToken0:
+				return eth.Hex(uniswapv2.AddrWord(m[1])), nil
+			case uniswapv2.SelToken1:
+				return eth.Hex(uniswapv2.AddrWord(m[2])), nil
+			}
+		}
 		if call.Data != uniswapv2.SelGetReserves {
-			return nil, &eth.RPCError{Code: -32000, Message: "execution reverted"}
+			return nil, &eth.RPCError{Code: 3, Message: "execution reverted"}
 		}
 		r0, r1, ok := c.ReservesAt(to, n)
 		if !ok {
@@ -430,6 +456,11 @@ func (c *Chain) getLogs(req rpcReq) (any, *eth.RPCError) {
 	json.Unmarshal(req.Params[0], &f)
 	from, _ := eth.ParseQty(f.FromBlock)
 	to, _ := eth.ParseQty(f.ToBlock)
+	c.mu.Lock()
+	if from < c.MinLogFrom {
+		c.MinLogFrom = from
+	}
+	c.mu.Unlock()
 	if c.MaxLogSpan > 0 && to-from+1 > c.MaxLogSpan {
 		return nil, &eth.RPCError{Code: -32005, Message: fmt.Sprintf("query exceeds max block range %d", c.MaxLogSpan)}
 	}

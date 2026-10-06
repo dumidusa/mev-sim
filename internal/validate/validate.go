@@ -17,6 +17,11 @@ import (
 	"github.com/dumidu/mev-sim/internal/v2state"
 )
 
+type FactoryCount struct {
+	Factory string
+	Pools   int
+}
+
 type Issue struct {
 	Check  string
 	Where  string
@@ -38,6 +43,10 @@ type Report struct {
 	UnseededTouches    int
 	UnknownEmitterLogs int
 	UnknownEmitters    int
+	ProbedRegistered   int
+	ProbedOtherFactory int
+	ProbedNotPair      int
+	TopOtherFactories  []FactoryCount
 
 	ArchiveSamples, ArchiveMatches int
 	ArchiveSkipped                 int
@@ -72,7 +81,36 @@ func Offline(st *store.Store, start, end uint64) (*Report, error) {
 	}
 	err := st.DB.QueryRow(`SELECT COUNT(*), COALESCE(SUM(count),0) FROM unknown_emitters WHERE topic=?`,
 		uniswapv2.TopicSync).Scan(&r.UnknownEmitters, &r.UnknownEmitterLogs)
-	return r, err
+	if err != nil {
+		return nil, err
+	}
+	probes, err := st.Probes()
+	if err != nil {
+		return nil, err
+	}
+	other := map[string]int{}
+	for _, p := range probes {
+		switch p.Status {
+		case store.ProbeRegistered:
+			r.ProbedRegistered++
+		case store.ProbeOtherFactory:
+			r.ProbedOtherFactory++
+			other[p.Factory]++
+		default:
+			r.ProbedNotPair++
+		}
+	}
+	for f, n := range other {
+		r.TopOtherFactories = append(r.TopOtherFactories, FactoryCount{f, n})
+	}
+	sort.Slice(r.TopOtherFactories, func(i, j int) bool {
+		a, b := r.TopOtherFactories[i], r.TopOtherFactories[j]
+		return a.Pools > b.Pools || (a.Pools == b.Pools && a.Factory < b.Factory)
+	})
+	if len(r.TopOtherFactories) > 5 {
+		r.TopOtherFactories = r.TopOtherFactories[:5]
+	}
+	return r, nil
 }
 
 func checkBlocks(st *store.Store, r *Report) error {

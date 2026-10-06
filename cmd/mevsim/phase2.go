@@ -168,7 +168,12 @@ func printReport(r *validate.Report, offline bool) {
 	fmt.Println("INFO (not pass/fail)")
 	fmt.Printf("  syncs %d, swaps %d (single-sided %d: exact getAmountOut %d, below max %d; multi-sided %d)\n",
 		r.Syncs, r.Swaps, r.SingleSided, r.ExactOut, r.UnderOut, r.MultiSided)
-	fmt.Printf("  coverage gap: %d Sync logs from %d untracked contracts (other V2 forks)\n", r.UnknownEmitterLogs, r.UnknownEmitters)
+	fmt.Printf("  emitters probed: %d tracked pools, %d pairs of other factories, %d not V2 pairs\n",
+		r.ProbedRegistered, r.ProbedOtherFactory, r.ProbedNotPair)
+	fmt.Printf("  coverage gap: %d Sync logs from %d untracked contracts\n", r.UnknownEmitterLogs, r.UnknownEmitters)
+	for _, f := range r.TopOtherFactories {
+		fmt.Printf("    other factory %s: %d active pools (not modelled)\n", f.Factory, f.Pools)
+	}
 	if len(r.Issues) > 0 {
 		fmt.Println(strings.Repeat("-", 64))
 		fmt.Println("FIRST ISSUES")

@@ -12,6 +12,21 @@ type Pool struct {
 	CreatedBlock, CreatedTxIndex     uint64
 	CreatedLogIndex                  uint64
 	PairIndex                        uint64
+	// "pair_created": PairCreated seen inside the range (creation position exact).
+	// "probe": existed before the range; CreatedBlock = 0 means "before start".
+	DiscoveredBy string
+}
+
+// Probe statuses.
+const (
+	ProbeRegistered   = "registered"    // factory() is a configured factory
+	ProbeOtherFactory = "other_factory" // a V2-style pair of an untracked fork
+	ProbeNotPair      = "not_v2_pair"   // reverted / no code / bad return at probe block
+)
+
+type Probe struct {
+	Address, Status, Factory, Token0, Token1 string
+	Block                                    uint64
 }
 
 type Seed struct {
@@ -59,7 +74,7 @@ func dec(s string) (*big.Int, error) {
 }
 
 func (s *Store) Pools() (map[string]Pool, error) {
-	rows, err := s.DB.Query(`SELECT address,factory,token0,token1,fee_bps,created_block,created_tx_index,created_log_index,pair_index FROM pools`)
+	rows, err := s.DB.Query(`SELECT address,factory,token0,token1,fee_bps,created_block,created_tx_index,created_log_index,pair_index,discovered_by FROM pools`)
 	if err != nil {
 		return nil, err
 	}
@@ -67,7 +82,24 @@ func (s *Store) Pools() (map[string]Pool, error) {
 	out := map[string]Pool{}
 	for rows.Next() {
 		var p Pool
-		if err := rows.Scan(&p.Address, &p.Factory, &p.Token0, &p.Token1, &p.FeeBps, &p.CreatedBlock, &p.CreatedTxIndex, &p.CreatedLogIndex, &p.PairIndex); err != nil {
+		if err := rows.Scan(&p.Address, &p.Factory, &p.Token0, &p.Token1, &p.FeeBps, &p.CreatedBlock, &p.CreatedTxIndex, &p.CreatedLogIndex, &p.PairIndex, &p.DiscoveredBy); err != nil {
+			return nil, err
+		}
+		out[p.Address] = p
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) Probes() (map[string]Probe, error) {
+	rows, err := s.DB.Query(`SELECT address,status,COALESCE(factory,''),COALESCE(token0,''),COALESCE(token1,''),probe_block FROM probes`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]Probe{}
+	for rows.Next() {
+		var p Probe
+		if err := rows.Scan(&p.Address, &p.Status, &p.Factory, &p.Token0, &p.Token1, &p.Block); err != nil {
 			return nil, err
 		}
 		out[p.Address] = p

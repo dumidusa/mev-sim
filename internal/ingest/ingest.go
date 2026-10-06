@@ -15,6 +15,7 @@ import (
 	"sort"
 	"strconv"
 	"sync"
+	"time"
 
 	"github.com/dumidu/mev-sim/internal/eth"
 	"github.com/dumidu/mev-sim/internal/store"
@@ -158,21 +159,35 @@ func (in *Ingestor) checkChain(ctx context.Context) error {
 // fetchLogs walks [from, to], halving the span on provider limit errors and
 // doubling it after successes. commit is called once per successful range,
 // in order, so it can write data and checkpoint atomically.
-func (in *Ingestor) fetchLogs(ctx context.Context, f eth.LogFilter, from, to uint64,
+func (in *Ingestor) fetchLogs(ctx context.Context, label string, f eth.LogFilter, from, to uint64,
 	commit func(from, to uint64, logs []eth.Log) error) error {
 	span := in.cfg.LogSpan
+	ceiling := in.cfg.MaxLogSpan // learned provider limit; never grow past it
+	last := time.Now()
+	calls, limited := 0, 0
 	for cur := from; cur <= to; {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if span > ceiling {
+			span = ceiling
+		}
 		hi := cur + span - 1
 		if hi > to || hi < cur {
 			hi = to
 		}
 		f.FromBlock, f.ToBlock = cur, hi
 		logs, err := in.chain.GetLogs(ctx, f)
+		calls++
 		if eth.IsLogLimit(err) {
 			if hi == cur {
 				return fmt.Errorf("block %d alone exceeds provider log limit: %w", cur, err)
 			}
+			limited++
 			span = (hi - cur + 1) / 2
+			if span < ceiling {
+				ceiling = span // provider refused this size: remember it
+			}
 			continue
 		}
 		if err != nil {
@@ -182,8 +197,13 @@ func (in *Ingestor) fetchLogs(ctx context.Context, f eth.LogFilter, from, to uin
 			return err
 		}
 		cur = hi + 1
-		if span < in.cfg.MaxLogSpan {
+		if span < ceiling {
 			span *= 2
+		}
+		if time.Since(last) > 10*time.Second {
+			last = time.Now()
+			done := float64(cur-from) / float64(to-from+1) * 100
+			in.cfg.Logf("   %s: block %d / %d (%.1f%%), span %d, %d calls, %d range-limited", label, cur-1, to, done, span, calls, limited)
 		}
 	}
 	return nil
@@ -202,7 +222,9 @@ func resumeFrom(st *store.Store, stream string, start uint64) (uint64, error) {
 func (in *Ingestor) discover(ctx context.Context) error {
 	for _, fac := range in.cfg.Factories {
 		stream := "pools:" + fac.Address
-		from, err := resumeFrom(in.st, stream, fac.DeployBlock)
+		// Only creations INSIDE the range. Pools that existed before Start are
+		// found by probing active emitters in S3 - no scan of all history.
+		from, err := resumeFrom(in.st, stream, in.cfg.Start)
 		if err != nil {
 			return err
 		}
@@ -210,7 +232,7 @@ func (in *Ingestor) discover(ctx context.Context) error {
 			continue
 		}
 		n := 0
-		err = in.fetchLogs(ctx, eth.LogFilter{Addresses: []string{fac.Address}, Topics: [][]string{{uniswapv2.TopicPairCreated}}},
+		err = in.fetchLogs(ctx, "PairCreated "+fac.Name, eth.LogFilter{Addresses: []string{fac.Address}, Topics: [][]string{{uniswapv2.TopicPairCreated}}},
 			from, in.cfg.End, func(lo, hi uint64, logs []eth.Log) error {
 				return in.st.Write(func(tx store.Tx) error {
 					for _, l := range logs {
@@ -220,7 +242,8 @@ func (in *Ingestor) discover(ctx context.Context) error {
 						}
 						if err := tx.InsertPool(store.Pool{Address: pc.Pair, Factory: fac.Address, Token0: pc.Token0,
 							Token1: pc.Token1, FeeBps: fac.FeeBps, CreatedBlock: l.BlockNumber,
-							CreatedTxIndex: l.TxIndex, CreatedLogIndex: l.LogIndex, PairIndex: pc.PairIndex}); err != nil {
+							CreatedTxIndex: l.TxIndex, CreatedLogIndex: l.LogIndex, PairIndex: pc.PairIndex,
+							DiscoveredBy: "pair_created"}); err != nil {
 							return err
 						}
 						n++
@@ -231,14 +254,17 @@ func (in *Ingestor) discover(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		in.cfg.Logf("   %s: %d new pools", fac.Name, n)
+		in.cfg.Logf("   %s: %d pools created inside the range", fac.Name, n)
 	}
 	return nil
 }
 
 // ---- S3 ------------------------------------------------------------------
 
-type EventStats struct{ Syncs, Swaps, Unknown int }
+type EventStats struct {
+	Syncs, Swaps, Unknown int
+	Probed                map[string]int
+}
 
 func (in *Ingestor) events(ctx context.Context) error {
 	pools, err := in.st.Pools()
@@ -249,14 +275,54 @@ func (in *Ingestor) events(ctx context.Context) error {
 	if err != nil || from > in.cfg.End {
 		return err
 	}
-	var stats EventStats
-	err = in.fetchLogs(ctx, eth.LogFilter{Topics: [][]string{{uniswapv2.TopicSync, uniswapv2.TopicSwap}}},
+	probes, err := in.st.Probes()
+	if err != nil {
+		return err
+	}
+	stats := EventStats{Probed: map[string]int{}}
+	err = in.fetchLogs(ctx, "Sync/Swap", eth.LogFilter{Topics: [][]string{{uniswapv2.TopicSync, uniswapv2.TopicSwap}}},
 		from, in.cfg.End, func(lo, hi uint64, logs []eth.Log) error {
+			// Ask every new emitter what it is, before writing anything.
+			var ask []string
+			seen := map[string]bool{}
+			for _, l := range logs {
+				if _, ok := pools[l.Address]; ok {
+					continue
+				}
+				if _, ok := probes[l.Address]; ok || seen[l.Address] {
+					continue
+				}
+				seen[l.Address] = true
+				ask = append(ask, l.Address)
+			}
+			sort.Strings(ask)
+			found, err := in.probe(ctx, ask)
+			if err != nil {
+				return err
+			}
 			unknown := map[[2]string]struct {
 				first uint64
 				n     int
 			}{}
-			err := in.st.Write(func(tx store.Tx) error {
+			err = in.st.Write(func(tx store.Tx) error {
+				for _, pr := range found {
+					if err := tx.InsertProbe(pr); err != nil {
+						return err
+					}
+					probes[pr.Address] = pr
+					if pr.Status != store.ProbeRegistered {
+						stats.Probed[pr.Status]++
+						continue
+					}
+					fac := in.factoryByAddr(pr.Factory)
+					p := store.Pool{Address: pr.Address, Factory: fac.Address, Token0: pr.Token0, Token1: pr.Token1,
+						FeeBps: fac.FeeBps, DiscoveredBy: "probe"} // CreatedBlock 0 = before range
+					if err := tx.InsertPool(p); err != nil {
+						return err
+					}
+					pools[p.Address] = p
+					stats.Probed[pr.Status]++
+				}
 				for _, l := range logs {
 					p, tracked := pools[l.Address]
 					if !tracked {
@@ -313,6 +379,8 @@ func (in *Ingestor) events(ctx context.Context) error {
 			return err
 		})
 	in.cfg.Logf("   syncs=%d swaps=%d untracked-emitter logs=%d", stats.Syncs, stats.Swaps, stats.Unknown)
+	in.cfg.Logf("   probed emitters: registered=%d other_factory=%d not_v2_pair=%d",
+		stats.Probed[store.ProbeRegistered], stats.Probed[store.ProbeOtherFactory], stats.Probed[store.ProbeNotPair])
 	return err
 }
 

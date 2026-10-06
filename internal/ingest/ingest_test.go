@@ -345,3 +345,73 @@ func TestSnapshotFeedsEngineState(t *testing.T) {
 		}
 	}
 }
+
+// Discovery must never scan history before the range.
+func TestDiscoveryDoesNotScanHistory(t *testing.T) {
+	gc := ethtest.DefaultConfig()
+	f := newFixture(t, gc)
+	st := openDB(t)
+	if err := run(t, f.rpc, st, cfg(gc)); err != nil {
+		t.Fatal(err)
+	}
+	if f.chain.MinLogFrom < start {
+		t.Fatalf("eth_getLogs asked from block %d (< start %d)", f.chain.MinLogFrom, start)
+	}
+	pools, _ := st.Pools()
+	byProbe, byEvent := 0, 0
+	for _, p := range pools {
+		switch p.DiscoveredBy {
+		case "probe":
+			byProbe++
+			if p.CreatedBlock != 0 {
+				t.Fatalf("probed pool %s has created block %d", p.Address, p.CreatedBlock)
+			}
+		case "pair_created":
+			byEvent++
+			if p.CreatedBlock < start {
+				t.Fatalf("pair_created pool outside range")
+			}
+		}
+	}
+	if byProbe == 0 || byEvent == 0 {
+		t.Fatalf("expected both discovery paths: probe=%d pair_created=%d", byProbe, byEvent)
+	}
+}
+
+// The untracked fork pool is identified as another factory's pair, recorded,
+// and its events are counted - not silently dropped, not mixed in.
+func TestForkPoolClassified(t *testing.T) {
+	gc := ethtest.DefaultConfig()
+	f := newFixture(t, gc)
+	st := openDB(t)
+	if err := run(t, f.rpc, st, cfg(gc)); err != nil {
+		t.Fatal(err)
+	}
+	pr, _ := st.Probes()
+	fork := "0x000000000000000000000000000000000000dead"
+	if pr[fork].Status != store.ProbeOtherFactory || pr[fork].Factory != ethtest.ForkFactory {
+		t.Fatalf("fork pool probe: %+v", pr[fork])
+	}
+	pools, _ := st.Pools()
+	if _, ok := pools[fork]; ok {
+		t.Fatal("fork pool registered as tracked")
+	}
+}
+
+// After the provider refuses a span, the fetcher must not keep retrying
+// larger spans (each refusal is a wasted, possibly billed, request).
+func TestSpanCeilingLearned(t *testing.T) {
+	gc := ethtest.DefaultConfig()
+	f := newFixture(t, gc)
+	f.chain.MaxLogSpan = 7
+	st := openDB(t)
+	c := cfg(gc)
+	c.LogSpan, c.MaxLogSpan = 64, 100000
+	if err := run(t, f.rpc, st, c); err != nil {
+		t.Fatal(err)
+	}
+	// 3 streams (2 factories + events) x 91 blocks at span 4 ≈ 70 calls; refusals ≤ 4 per stream.
+	if n := f.chain.Calls["eth_getLogs"]; n > 90 {
+		t.Fatalf("%d getLogs calls: span ceiling not respected", n)
+	}
+}

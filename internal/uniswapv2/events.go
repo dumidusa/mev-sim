@@ -16,7 +16,10 @@ const (
 	TopicPairCreated = "0x0d3648bd0f6ba80134a33ba9275ac585d9d315f0ad8355cddefde31afa28d0e9" // PairCreated(address,address,address,uint256)
 	TopicSync        = "0x1c411e9a96e071241c2f21f7726b17ae89e3cab4c78be50e062b03a9fffbbad1" // Sync(uint112,uint112)
 	TopicSwap        = "0xd78ad95fa46c994b6551d0da85fc275fe613ce37657fb8d5e3d130840159d822" // Swap(address,uint256,uint256,uint256,uint256,address)
-	SelGetReserves   = "0x0902f1ac"                                                         // getReserves()
+	SelGetReserves   = "0x0902f1ac"
+	SelFactory       = "0xc45a0155" // factory()
+	SelToken0        = "0x0dfe1681" // token0()
+	SelToken1        = "0xd21220a7" // token1()                                                         // getReserves()
 )
 
 type PairCreated struct {
@@ -104,6 +107,17 @@ func DecodeSwap(l eth.Log) (Swap, error) {
 	s.Amount0Out = new(big.Int).SetBytes(word(l.Data, 2))
 	s.Amount1Out = new(big.Int).SetBytes(word(l.Data, 3))
 	return s, nil
+}
+
+// Call returns calldata for a no-argument getter selector.
+func Call(selector string) []byte { b, _ := eth.ParseBytes(selector); return b }
+
+// DecodeAddressReturn parses a single `address` return value.
+func DecodeAddressReturn(b []byte) (string, error) {
+	if len(b) != 32 {
+		return "", fmt.Errorf("address return: %d bytes, want 32", len(b))
+	}
+	return addrFromWord(b)
 }
 
 // GetReservesCall is the calldata for getReserves().

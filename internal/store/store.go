@@ -16,7 +16,7 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 )
 
-const SchemaVersion = "2"
+const SchemaVersion = "3"
 
 const schema = `
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -26,7 +26,11 @@ CREATE TABLE IF NOT EXISTS factories (
 CREATE TABLE IF NOT EXISTS pools (
   address TEXT PRIMARY KEY, factory TEXT NOT NULL, token0 TEXT NOT NULL, token1 TEXT NOT NULL,
   fee_bps INTEGER NOT NULL, created_block INTEGER NOT NULL, created_tx_index INTEGER NOT NULL,
-  created_log_index INTEGER NOT NULL, pair_index INTEGER NOT NULL);
+  created_log_index INTEGER NOT NULL, pair_index INTEGER NOT NULL, discovered_by TEXT NOT NULL);
+-- Every Sync/Swap emitter we asked factory()/token0()/token1(), with the verdict.
+CREATE TABLE IF NOT EXISTS probes (
+  address TEXT PRIMARY KEY, status TEXT NOT NULL, factory TEXT, token0 TEXT, token1 TEXT,
+  probe_block INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS v2_seed (
   pool TEXT PRIMARY KEY, block_number INTEGER NOT NULL, reserve0 TEXT NOT NULL, reserve1 TEXT NOT NULL,
   source TEXT NOT NULL);
@@ -138,8 +142,15 @@ func (t Tx) InsertFactory(addr, name string, feeBps int64, deploy uint64) error 
 }
 
 func (t Tx) InsertPool(p Pool) error {
-	_, err := t.Exec(`INSERT INTO pools VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING`,
-		p.Address, p.Factory, p.Token0, p.Token1, p.FeeBps, p.CreatedBlock, p.CreatedTxIndex, p.CreatedLogIndex, p.PairIndex)
+	_, err := t.Exec(`INSERT INTO pools VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING`,
+		p.Address, p.Factory, p.Token0, p.Token1, p.FeeBps, p.CreatedBlock, p.CreatedTxIndex, p.CreatedLogIndex,
+		p.PairIndex, p.DiscoveredBy)
+	return err
+}
+
+func (t Tx) InsertProbe(p Probe) error {
+	_, err := t.Exec(`INSERT INTO probes VALUES(?,?,?,?,?,?) ON CONFLICT DO NOTHING`,
+		p.Address, p.Status, nullable(p.Factory), nullable(p.Token0), nullable(p.Token1), p.Block)
 	return err
 }
 
@@ -196,7 +207,7 @@ func nullable(s string) any {
 // Excludes `progress` (resume bookkeeping, not data).
 func (s *Store) Hash() (string, error) {
 	tables := []struct{ name, order string }{
-		{"meta", "key"}, {"factories", "address"}, {"pools", "address"}, {"v2_seed", "pool"},
+		{"meta", "key"}, {"factories", "address"}, {"pools", "address"}, {"probes", "address"}, {"v2_seed", "pool"},
 		{"v2_sync", "block_number, log_index"}, {"v2_swap", "block_number, log_index"},
 		{"unknown_emitters", "address, topic"}, {"blocks", "number"},
 		{"transactions", "block_number, tx_index"},
@@ -237,7 +248,7 @@ func (s *Store) Hash() (string, error) {
 // Counts returns row counts per table (for stats output).
 func (s *Store) Counts() (map[string]int64, error) {
 	out := map[string]int64{}
-	for _, t := range []string{"factories", "pools", "v2_seed", "v2_sync", "v2_swap", "unknown_emitters", "blocks", "transactions"} {
+	for _, t := range []string{"factories", "pools", "probes", "v2_seed", "v2_sync", "v2_swap", "unknown_emitters", "blocks", "transactions"} {
 		var n int64
 		if err := s.DB.QueryRow("SELECT COUNT(*) FROM " + t).Scan(&n); err != nil {
 			return nil, err
