@@ -86,6 +86,10 @@ type Chain struct {
 	// Fault injection: pool -> block where eth_call returns r0+1.
 	WrongReserves map[string]uint64
 	Calls         map[string]int
+	// Throttling like hosted providers: every Nth request is refused.
+	ThrottleHTTPEvery int // HTTP 429 (+ Retry-After: 0)
+	ThrottleJSONEvery int // HTTP 200 + JSON error code 429 "compute units"
+	requests          int
 	// MinLogFrom is the smallest fromBlock any eth_getLogs asked for.
 	MinLogFrom uint64
 }
@@ -332,9 +336,26 @@ func (c *Chain) serve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	c.mu.Lock()
-	c.Calls[req.Method]++
+	c.requests++
+	n := c.requests
+	httpT := c.ThrottleHTTPEvery > 0 && n%c.ThrottleHTTPEvery == 0
+	jsonT := c.ThrottleJSONEvery > 0 && n%c.ThrottleJSONEvery == 0
+	if !httpT && !jsonT {
+		c.Calls[req.Method]++
+	}
 	c.mu.Unlock()
-	res, rerr := c.dispatch(req)
+	if httpT {
+		w.Header().Set("Retry-After", "0")
+		http.Error(w, `{"jsonrpc":"2.0","error":{"code":429,"message":"Too Many Requests"}}`, 429)
+		return
+	}
+	var res any
+	var rerr *eth.RPCError
+	if jsonT {
+		rerr = &eth.RPCError{Code: 429, Message: "Your app has exceeded its compute units per second capacity"}
+	} else {
+		res, rerr = c.dispatch(req)
+	}
 	out := map[string]any{"jsonrpc": "2.0", "id": req.ID}
 	if rerr != nil {
 		out["error"] = rerr

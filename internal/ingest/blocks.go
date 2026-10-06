@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math/big"
 	"sync"
+	"time"
 
 	"github.com/dumidu/mev-sim/internal/eth"
 	"github.com/dumidu/mev-sim/internal/store"
@@ -54,6 +55,7 @@ func (in *Ingestor) blocks(ctx context.Context) error {
 		return err
 	}
 	total := 0
+	last := time.Now()
 	for lo := from; lo <= in.cfg.End; lo += in.cfg.BlockChunk {
 		hi := lo + in.cfg.BlockChunk - 1
 		if hi > in.cfg.End {
@@ -98,6 +100,11 @@ func (in *Ingestor) blocks(ctx context.Context) error {
 		})
 		if err != nil {
 			return err
+		}
+		if time.Since(last) > 10*time.Second || hi == in.cfg.End {
+			last = time.Now()
+			in.cfg.Logf("   blocks: %d / %d (%.1f%%) saved", hi, in.cfg.End,
+				float64(hi-in.cfg.Start+1)/float64(in.cfg.End-in.cfg.Start+1)*100)
 		}
 	}
 	in.cfg.Logf("   blocks stored=%d", total)

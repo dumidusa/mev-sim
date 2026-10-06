@@ -2,7 +2,10 @@ package eth_test
 
 import (
 	"context"
+	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/dumidu/mev-sim/internal/eth"
 	"github.com/dumidu/mev-sim/internal/eth/ethtest"
@@ -53,5 +56,71 @@ func TestClientAgainstFakeNode(t *testing.T) {
 	w0, w1, _ := ch.ReservesAt(pool, head)
 	if err != nil || r0.Cmp(w0) != 0 || r1.Cmp(w1) != 0 {
 		t.Fatalf("getReserves mismatch")
+	}
+}
+
+func fastClient(url string) *eth.Client {
+	c := eth.NewClient(url)
+	c.MaxRetries = 0
+	c.BaseThrottleWait, c.MaxThrottleWait = time.Millisecond, 5*time.Millisecond
+	return c
+}
+
+// Both throttle styles (HTTP 429 and JSON "compute units") are waited out.
+func TestThrottleIsRetried(t *testing.T) {
+	ch := ethtest.Generate(ethtest.DefaultConfig())
+	ch.ThrottleHTTPEvery, ch.ThrottleJSONEvery = 2, 3 // most requests refused at first
+	srv := ch.Server()
+	defer srv.Close()
+	c := fastClient(srv.URL)
+	for i := 0; i < 20; i++ {
+		if _, err := c.BlockByNumber(context.Background(), 1000+uint64(i)); err != nil {
+			t.Fatalf("call %d: %v", i, err)
+		}
+	}
+	if c.Stats.Throttled.Load() == 0 {
+		t.Fatal("no throttling observed")
+	}
+}
+
+func TestThrottleGivesUpWithClearError(t *testing.T) {
+	ch := ethtest.Generate(ethtest.DefaultConfig())
+	ch.ThrottleHTTPEvery = 1 // refuse everything
+	srv := ch.Server()
+	defer srv.Close()
+	c := fastClient(srv.URL)
+	c.MaxThrottleRetries = 3
+	_, err := c.BlockNumber(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "--rps") {
+		t.Fatalf("got %v", err)
+	}
+}
+
+func TestRPSLimit(t *testing.T) {
+	ch := ethtest.Generate(ethtest.DefaultConfig())
+	srv := ch.Server()
+	defer srv.Close()
+	c := fastClient(srv.URL)
+	c.SetRPS(50) // 20 ms apart
+	t0 := time.Now()
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ { // 8 workers share one limit
+		wg.Add(1)
+		go func() { defer wg.Done(); c.BlockNumber(context.Background()) }()
+	}
+	wg.Wait()
+	if d := time.Since(t0); d < 130*time.Millisecond {
+		t.Fatalf("8 requests at 50 rps took %s, limiter not shared", d)
+	}
+}
+
+func TestThrottleIsNotALogLimit(t *testing.T) {
+	thr := &eth.RPCError{Code: 429, Message: "exceeded its compute units per second capacity"}
+	if eth.IsLogLimit(thr) || !eth.IsThrottle(thr) {
+		t.Fatal("throttle misclassified as log range limit")
+	}
+	lim := &eth.RPCError{Code: -32600, Message: "You can make eth_getLogs requests with up to a 10 block range"}
+	if !eth.IsLogLimit(lim) || eth.IsThrottle(lim) {
+		t.Fatal("log range limit misclassified")
 	}
 }

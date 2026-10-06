@@ -8,8 +8,11 @@ import (
 	"fmt"
 	"io"
 	"math/big"
+	"math/rand"
 	"net/http"
+	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -22,11 +25,30 @@ type RPCError struct {
 
 func (e *RPCError) Error() string { return fmt.Sprintf("rpc error %d: %s", e.Code, e.Message) }
 
-// IsLogLimit reports whether err is a provider "range/result too large" error.
-// Providers word this differently; we match the common forms.
-func IsLogLimit(err error) bool {
+// IsThrottle reports whether err is a provider rate-limit / capacity error.
+func IsThrottle(err error) bool {
 	var re *RPCError
 	if !errors.As(err, &re) {
+		return false
+	}
+	if re.Code == 429 {
+		return true
+	}
+	m := strings.ToLower(re.Message)
+	for _, k := range []string{"compute units", "rate limit", "too many requests", "capacity", "throughput"} {
+		if strings.Contains(m, k) {
+			return true
+		}
+	}
+	return false
+}
+
+// IsLogLimit reports whether err is a provider "range/result too large" error.
+// Providers word this differently; we match the common forms. Throttling is
+// never a log limit (splitting the range would not help).
+func IsLogLimit(err error) bool {
+	var re *RPCError
+	if !errors.As(err, &re) || IsThrottle(err) {
 		return false
 	}
 	m := strings.ToLower(re.Message)
@@ -41,12 +63,105 @@ func IsLogLimit(err error) bool {
 type Client struct {
 	URL        string
 	HTTP       *http.Client
-	MaxRetries int
-	id         atomic.Uint64
+	MaxRetries int // transport / 5xx errors
+	// MaxThrottleRetries: attempts after a 429 / capacity error. Waits grow
+	// 1s, 2s, 4s ... capped at MaxThrottleWait, or follow Retry-After.
+	MaxThrottleRetries int
+	MaxThrottleWait    time.Duration
+	BaseThrottleWait   time.Duration
+	OnThrottle         func(method string, wait time.Duration)
+
+	id      atomic.Uint64
+	limiter *limiter
+	pauseMu sync.Mutex
+	pause   time.Time // all requests wait until this time (set on throttle)
+	Stats   ClientStats
+}
+
+type ClientStats struct {
+	Requests, Throttled, Retried atomic.Int64
 }
 
 func NewClient(url string) *Client {
-	return &Client{URL: url, HTTP: &http.Client{Timeout: 60 * time.Second}, MaxRetries: 5}
+	return &Client{URL: url, HTTP: &http.Client{Timeout: 60 * time.Second}, MaxRetries: 5,
+		MaxThrottleRetries: 20, MaxThrottleWait: 30 * time.Second, BaseThrottleWait: time.Second}
+}
+
+// SetRPS limits requests per second across all goroutines (0 = unlimited).
+func (c *Client) SetRPS(rps float64) {
+	if rps <= 0 {
+		c.limiter = nil
+		return
+	}
+	c.limiter = &limiter{interval: time.Duration(float64(time.Second) / rps)}
+}
+
+// limiter spaces requests evenly: at most one every interval.
+type limiter struct {
+	mu       sync.Mutex
+	next     time.Time
+	interval time.Duration
+}
+
+func (l *limiter) reserve() time.Duration {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	now := time.Now()
+	if l.next.Before(now) {
+		l.next = now
+	}
+	wait := l.next.Sub(now)
+	l.next = l.next.Add(l.interval)
+	return wait
+}
+
+func sleep(ctx context.Context, d time.Duration) error {
+	if d <= 0 {
+		return ctx.Err()
+	}
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-t.C:
+		return nil
+	}
+}
+
+func (c *Client) waitTurn(ctx context.Context) error {
+	c.pauseMu.Lock()
+	p := time.Until(c.pause)
+	c.pauseMu.Unlock()
+	if err := sleep(ctx, p); err != nil {
+		return err
+	}
+	if c.limiter != nil {
+		return sleep(ctx, c.limiter.reserve())
+	}
+	return nil
+}
+
+// throttled pauses every worker, not only the one that was refused.
+func (c *Client) throttled(method string, n int, retryAfter string) time.Duration {
+	wait := c.BaseThrottleWait << n
+	if s, err := strconv.Atoi(strings.TrimSpace(retryAfter)); err == nil && s >= 0 {
+		wait = time.Duration(s) * time.Second
+	}
+	if wait > c.MaxThrottleWait || wait < 0 {
+		wait = c.MaxThrottleWait
+	}
+	wait += time.Duration(rand.Int63n(int64(wait/4) + 1)) // jitter so workers don't stampede
+	c.pauseMu.Lock()
+	if until := time.Now().Add(wait); until.After(c.pause) {
+		c.pause = until
+	}
+	c.pauseMu.Unlock()
+	c.Stats.Throttled.Add(1)
+	if c.OnThrottle != nil {
+		c.OnThrottle(method, wait)
+	}
+	return wait
 }
 
 type request struct {
@@ -61,35 +176,64 @@ type response struct {
 	Error  *RPCError       `json:"error"`
 }
 
-// Call performs one JSON-RPC call with retry on transport errors, HTTP 429
-// and 5xx. Node-level errors (RPCError) are NOT retried: they are returned
-// so the caller can react (e.g. split a log range).
+// Call performs one JSON-RPC call.
+//   - 429 / capacity errors: wait and retry (up to MaxThrottleRetries), pausing all workers
+//   - transport errors and 5xx: retry with backoff (up to MaxRetries)
+//   - other node errors (RPCError): returned at once, so the caller can react
 func (c *Client) Call(ctx context.Context, method string, params []any, out any) error {
 	body, _ := json.Marshal(request{"2.0", c.id.Add(1), method, params})
 	var lastErr error
-	for attempt := 0; attempt <= c.MaxRetries; attempt++ {
-		if attempt > 0 {
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			case <-time.After(time.Duration(200<<attempt) * time.Millisecond):
-			}
+	transport, throttles := 0, 0
+	for {
+		if err := c.waitTurn(ctx); err != nil {
+			return err
 		}
+		c.Stats.Requests.Add(1)
 		req, _ := http.NewRequestWithContext(ctx, "POST", c.URL, bytes.NewReader(body))
 		req.Header.Set("Content-Type", "application/json")
 		resp, err := c.HTTP.Do(req)
+		var raw []byte
+		if err == nil {
+			raw, err = io.ReadAll(resp.Body)
+			resp.Body.Close()
+		}
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		retryTransport := func(e error) error {
+			lastErr = e
+			transport++
+			if transport > c.MaxRetries {
+				return fmt.Errorf("%s: retries exhausted: %w", method, lastErr)
+			}
+			c.Stats.Retried.Add(1)
+			return sleep(ctx, time.Duration(200<<transport)*time.Millisecond)
+		}
+		retryThrottle := func(e error, retryAfter string) error {
+			lastErr = e
+			if throttles >= c.MaxThrottleRetries {
+				return fmt.Errorf("%s: still rate-limited after %d waits (lower --rps or --workers): %w", method, throttles, lastErr)
+			}
+			c.throttled(method, throttles, retryAfter)
+			throttles++
+			return nil // waitTurn sleeps until the shared pause ends
+		}
 		if err != nil {
-			lastErr = err
+			if e := retryTransport(err); e != nil {
+				return e
+			}
 			continue
 		}
-		raw, err := io.ReadAll(resp.Body)
-		resp.Body.Close()
-		if err != nil {
-			lastErr = err
+		if resp.StatusCode == 429 {
+			if e := retryThrottle(fmt.Errorf("%s: http 429", method), resp.Header.Get("Retry-After")); e != nil {
+				return e
+			}
 			continue
 		}
-		if resp.StatusCode == 429 || resp.StatusCode >= 500 {
-			lastErr = fmt.Errorf("%s: http %d", method, resp.StatusCode)
+		if resp.StatusCode >= 500 {
+			if e := retryTransport(fmt.Errorf("%s: http %d", method, resp.StatusCode)); e != nil {
+				return e
+			}
 			continue
 		}
 		var r response
@@ -97,6 +241,12 @@ func (c *Client) Call(ctx context.Context, method string, params []any, out any)
 			return fmt.Errorf("%s: decode response: %w (http %d)", method, err, resp.StatusCode)
 		}
 		if r.Error != nil {
+			if IsThrottle(r.Error) {
+				if e := retryThrottle(r.Error, ""); e != nil {
+					return e
+				}
+				continue
+			}
 			return r.Error
 		}
 		if string(r.Result) == "null" {
@@ -104,7 +254,6 @@ func (c *Client) Call(ctx context.Context, method string, params []any, out any)
 		}
 		return json.Unmarshal(r.Result, out)
 	}
-	return fmt.Errorf("%s: retries exhausted: %w", method, lastErr)
 }
 
 // ---- wire formats ------------------------------------------------------

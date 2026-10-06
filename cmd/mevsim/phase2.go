@@ -52,7 +52,8 @@ func cmdIngest(args []string) int {
 	conf := fs.Uint64("confirmations", 64, "refuse end-block newer than head - N")
 	span := fs.Uint64("log-span", 2000, "initial eth_getLogs block span (auto-adapts)")
 	maxSpan := fs.Uint64("max-log-span", 100000, "upper bound for adaptive span")
-	chunk := fs.Uint64("block-chunk", 100, "blocks per commit")
+	chunk := fs.Uint64("block-chunk", 20, "blocks per commit (progress is saved after each)")
+	rps := fs.Float64("rps", 10, "max RPC requests per second, all workers together (0 = no limit)")
 	txMode := fs.String("tx-mode", "touching", "touching | all")
 	seed := fs.String("seed", "active", "active | all")
 	workers := fs.Int("workers", 8, "parallel RPC requests")
@@ -73,7 +74,21 @@ func cmdIngest(args []string) int {
 	}
 	defer st.Close()
 	t0 := time.Now()
-	in, err := ingest.New(eth.NewClient(rpcURL(*rpc)), st, ingest.Config{
+	client := eth.NewClient(rpcURL(*rpc))
+	client.SetRPS(*rps)
+	var lastWarn time.Time
+	client.OnThrottle = func(method string, wait time.Duration) {
+		if time.Since(lastWarn) > 5*time.Second {
+			lastWarn = time.Now()
+			fmt.Printf("[%s]    rate-limited by provider (%s): pausing %s, then continuing\n",
+				time.Since(t0).Round(time.Second), method, wait.Round(100*time.Millisecond))
+		}
+	}
+	defer func() {
+		fmt.Printf("rpc: %d requests, %d rate-limited (waited and retried), %d transport retries\n",
+			client.Stats.Requests.Load(), client.Stats.Throttled.Load(), client.Stats.Retried.Load())
+	}()
+	in, err := ingest.New(client, st, ingest.Config{
 		Start: *start, End: *end, Factories: factories, ChainID: chainID,
 		Confirmations: *conf, LogSpan: *span, MaxLogSpan: *maxSpan, BlockChunk: *chunk,
 		TxMode: *txMode, SeedMode: *seed, Workers: *workers,
@@ -113,6 +128,7 @@ func cmdValidate(args []string) int {
 	samples := fs.Int("samples", 500, "random (pool, block) archive samples, on top of every pool at end block")
 	seed := fs.Int64("seed", 1, "sampling seed (reproducible)")
 	offline := fs.Bool("offline", false, "skip the archive comparison")
+	rps := fs.Float64("rps", 10, "max RPC requests per second (0 = no limit)")
 	fs.Parse(args)
 	st, err := store.Open(*db)
 	if err != nil {
@@ -128,7 +144,9 @@ func cmdValidate(args []string) int {
 		log.Fatal(err)
 	}
 	if !*offline {
-		if err := validate.Archive(ctxWithSignal(), eth.NewClient(rpcURL(*rpc)), st, rep, *samples, *seed); err != nil {
+		client := eth.NewClient(rpcURL(*rpc))
+		client.SetRPS(*rps)
+		if err := validate.Archive(ctxWithSignal(), client, st, rep, *samples, *seed); err != nil {
 			log.Fatal(err)
 		}
 	}

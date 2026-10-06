@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/dumidu/mev-sim/internal/eth"
 	"github.com/dumidu/mev-sim/internal/eth/ethtest"
@@ -30,6 +31,7 @@ func newFixture(t *testing.T, gc ethtest.GenConfig) fixture {
 	srv := ch.Server()
 	c := eth.NewClient(srv.URL)
 	c.MaxRetries = 0
+	c.BaseThrottleWait, c.MaxThrottleWait = time.Millisecond, 5*time.Millisecond
 	t.Cleanup(srv.Close)
 	return fixture{ch, c, srv.Close}
 }
@@ -413,5 +415,29 @@ func TestSpanCeilingLearned(t *testing.T) {
 	// 3 streams (2 factories + events) x 91 blocks at span 4 ≈ 70 calls; refusals ≤ 4 per stream.
 	if n := f.chain.Calls["eth_getLogs"]; n > 90 {
 		t.Fatalf("%d getLogs calls: span ceiling not respected", n)
+	}
+}
+
+// Heavy provider throttling must change nothing in the stored data.
+func TestThrottledIngestIdenticalToClean(t *testing.T) {
+	gc := ethtest.DefaultConfig()
+	clean := newFixture(t, gc)
+	a := openDB(t)
+	if err := run(t, clean.rpc, a, cfg(gc)); err != nil {
+		t.Fatal(err)
+	}
+	want, _ := a.Hash()
+
+	slow := newFixture(t, gc)
+	slow.chain.ThrottleHTTPEvery, slow.chain.ThrottleJSONEvery = 3, 7
+	b := openDB(t)
+	if err := run(t, slow.rpc, b, cfg(gc)); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := b.Hash(); got != want {
+		t.Fatal("throttled ingest produced different data")
+	}
+	if slow.rpc.Stats.Throttled.Load() < 20 {
+		t.Fatalf("only %d throttles: test too weak", slow.rpc.Stats.Throttled.Load())
 	}
 }

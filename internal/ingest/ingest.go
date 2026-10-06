@@ -58,7 +58,7 @@ func (c *Config) defaults() {
 		c.MaxLogSpan = 100_000
 	}
 	if c.BlockChunk == 0 {
-		c.BlockChunk = 100
+		c.BlockChunk = 20
 	}
 	if c.TxMode == "" {
 		c.TxMode = "touching"
