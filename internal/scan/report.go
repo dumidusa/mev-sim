@@ -619,7 +619,7 @@ func (r *Result) report100k(P func(string, ...any), head func(string), opps []Op
 	// conservative: drop the top 1% (outliers), verified tokens, 10% capture
 	sorted := append([]Opp(nil), opps...)
 	sort.Slice(sorted, func(i, j int) bool { return sorted[i].Net.Cmp(sorted[j].Net) > 0 })
-	k := len(sorted) / 100
+	k := (len(sorted) + 99) / 100 // ceil: with few opportunities the top 1% is still >= 1
 	cut := map[int]bool{}
 	for _, o := range sorted[:k] {
 		cut[o.G.ID] = true
