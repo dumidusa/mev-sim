@@ -44,7 +44,7 @@ WHERE number BETWEEN @s AND @e"""
 
 def sql_blocks(ds):
     return f"""
-SELECT number, hash, parent_hash, UNIX_SECONDS(timestamp) AS timestamp,
+SELECT number, `hash` AS hash, parent_hash, UNIX_SECONDS(timestamp) AS timestamp,
        base_fee_per_gas, gas_limit, gas_used, transaction_count, miner
 FROM `{ds}.blocks`
 WHERE timestamp BETWEEN TIMESTAMP_SECONDS(@lo) AND TIMESTAMP_SECONDS(@hi)
@@ -140,7 +140,8 @@ def main():
                  f"range not fully available in {ds} (gap or not yet loaded). Choose another range.")
     lo, hi = w["lo"], w["hi"]
     p = params(a.start, a.end, lo, hi)
-    print(f"   time window {datetime.datetime.utcfromtimestamp(lo)} .. {datetime.datetime.utcfromtimestamp(hi)} UTC")
+    utc = datetime.timezone.utc
+    print(f"   time window {datetime.datetime.fromtimestamp(lo, utc)} .. {datetime.datetime.fromtimestamp(hi, utc)}")
 
     queries = [("blocks", sql_blocks(ds)), ("logs", sql_logs(ds)), ("txs", sql_txs(ds))]
     total = 0
@@ -158,7 +159,7 @@ def main():
         sys.exit("aborted")
 
     manifest = {"start": a.start, "end": a.end, "dataset": ds, "time_lo": lo, "time_hi": hi,
-                "created_at": datetime.datetime.utcnow().isoformat() + "Z", "files": {}, "sql": {}}
+                "created_at": datetime.datetime.now(datetime.timezone.utc).isoformat(), "files": {}, "sql": {}}
     for name, sql in queries:
         path = os.path.join(a.out, f"{name}.ndjson.gz")
         n, billed = export(client, sql, p, path, name)
