@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"runtime/debug"
 	"time"
 
 	"github.com/dumidu/mev-sim/internal/eth"
@@ -42,7 +43,11 @@ func cmdScan(args []string) int {
 	curve := fs.Int("curve-points", 12, "profit-curve samples stored for valid candidates (0 = off)")
 	save := fs.Bool("save", true, "persist results to the db")
 	workers := fs.Int("workers", runtime.NumCPU(), "CPU cores for route evaluation (results identical for any value)")
+	memGB := fs.Float64("mem-limit-gb", 3, "soft RAM target for the Go heap (GC works harder near it; 0 = off)")
 	fs.Parse(args)
+	if *memGB > 0 {
+		debug.SetMemoryLimit(int64(*memGB * (1 << 30)))
+	}
 
 	st, err := store.Open(*db)
 	if err != nil {
@@ -58,7 +63,7 @@ func cmdScan(args []string) int {
 	}
 
 	cfg := scan.Config{Start: *start, End: *end, MaxHops: *maxHops, MaxRoutes: *maxRoutes,
-		BuilderShareBps: *builder, CurvePoints: *curve, Workers: *workers,
+		BuilderShareBps: *builder, CurvePoints: *curve, Workers: *workers, SpillDir: filepath.Dir(*db),
 		Progress: func(l string) { fmt.Fprintln(os.Stderr, "  "+l) }}
 	switch *network {
 	case "mainnet":
@@ -137,12 +142,15 @@ func cmdScan(args []string) int {
 		fmt.Fprintln(os.Stderr, "scan failed:", err)
 		return 1
 	}
+	defer res.Close() // removes the temporary candidate file
 	fmt.Fprintf(os.Stderr, "scan done in %s\n", time.Since(t0).Round(time.Millisecond))
 
 	meta := scan.RunMeta{RunID: "(not saved)", CodeVersion: version, ResultsHash: res.ResultsHash()}
 	if *save {
+		fmt.Fprintf(os.Stderr, "saving %d candidates to the db...\n", res.NCands)
 		if meta, err = scan.Save(st, res, version); err != nil {
-			log.Fatal(err)
+			fmt.Fprintln(os.Stderr, "save failed:", err)
+			return 1
 		}
 	}
 	var buf bytes.Buffer

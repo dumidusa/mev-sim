@@ -72,12 +72,20 @@ func (a Arb) Tokens() []string {
 }
 
 // Load groups stored swaps by tx, in (block, txIndex, logIndex) order.
+// It holds every swap in memory; use Stream for long ranges.
 func Load(st *store.Store, from, to uint64) ([]*Tx, error) {
+	var out []*Tx
+	err := Stream(st, from, to, func(tx *Tx) error { out = append(out, tx); return nil })
+	return out, err
+}
+
+// Stream calls fn once per tx that has swaps, in (block, txIndex) order,
+// holding only one tx in memory at a time.
+func Stream(st *store.Store, from, to uint64, fn func(*Tx) error) error {
 	pools, err := st.Pools()
 	if err != nil {
-		return nil, err
+		return err
 	}
-	var out []*Tx
 	var cur *Tx
 	err = st.Events(from, to, func(ev store.Event) error {
 		if ev.Swap == nil {
@@ -85,8 +93,12 @@ func Load(st *store.Store, from, to uint64) ([]*Tx, error) {
 		}
 		s := ev.Swap
 		if cur == nil || cur.Block != s.Block || cur.TxIndex != s.TxIndex {
+			if cur != nil {
+				if err := fn(cur); err != nil {
+					return err
+				}
+			}
 			cur = &Tx{Block: s.Block, TxIndex: s.TxIndex, TxHash: s.TxHash}
-			out = append(out, cur)
 		}
 		p, ok := pools[s.Pool]
 		if !ok {
@@ -106,7 +118,13 @@ func Load(st *store.Store, from, to uint64) ([]*Tx, error) {
 		cur.Legs = append(cur.Legs, l)
 		return nil
 	})
-	return out, err
+	if err != nil {
+		return err
+	}
+	if cur != nil {
+		return fn(cur)
+	}
+	return nil
 }
 
 // Classify returns the tx pattern and any arbitrage sub-cycles.
@@ -180,37 +198,48 @@ type TokenEvidence struct {
 // DIRECTLY to the next pool (recipient == next pool). That is the only case
 // where "amount sent" and "amount received" are both visible in Swap logs.
 func Tokens(txs []*Tx) map[string]*TokenEvidence {
-	ev := map[string]*TokenEvidence{}
-	get := func(t string) *TokenEvidence {
-		if ev[t] == nil {
-			ev[t] = &TokenEvidence{Token: t, Status: TokenUnverified}
-		}
-		return ev[t]
-	}
+	acc := NewTokenAcc()
 	for _, tx := range txs {
-		for k := 0; k+1 < len(tx.Legs); k++ {
-			a, b := tx.Legs[k], tx.Legs[k+1]
-			if a.Recipient != b.Pool || a.TokenOut != b.TokenIn {
-				continue
+		acc.Add(tx)
+	}
+	return acc.Result()
+}
+
+// TokenAcc accumulates token evidence one tx at a time (streaming form of Tokens).
+type TokenAcc struct{ ev map[string]*TokenEvidence }
+
+func NewTokenAcc() *TokenAcc { return &TokenAcc{ev: map[string]*TokenEvidence{}} }
+
+func (a *TokenAcc) Add(tx *Tx) {
+	for k := 0; k+1 < len(tx.Legs); k++ {
+		x, y := tx.Legs[k], tx.Legs[k+1]
+		if x.Recipient != y.Pool || x.TokenOut != y.TokenIn {
+			continue
+		}
+		e := a.ev[x.TokenOut]
+		if e == nil {
+			e = &TokenEvidence{Token: x.TokenOut, Status: TokenUnverified}
+			a.ev[x.TokenOut] = e
+		}
+		switch y.AmountIn.Cmp(x.AmountOut) {
+		case 0:
+			e.Exact++
+		case -1:
+			e.Short++
+			if e.EvidenceTx == "" {
+				e.EvidenceTx = tx.TxHash
 			}
-			e := get(a.TokenOut)
-			switch b.AmountIn.Cmp(a.AmountOut) {
-			case 0:
-				e.Exact++
-			case -1:
-				e.Short++
-				if e.EvidenceTx == "" {
-					e.EvidenceTx = tx.TxHash
-				}
-			default:
-				e.Over++
-				if e.EvidenceTx == "" {
-					e.EvidenceTx = tx.TxHash
-				}
+		default:
+			e.Over++
+			if e.EvidenceTx == "" {
+				e.EvidenceTx = tx.TxHash
 			}
 		}
 	}
-	for _, e := range ev {
+}
+
+func (a *TokenAcc) Result() map[string]*TokenEvidence {
+	for _, e := range a.ev {
 		switch {
 		case e.Short > 0:
 			e.Status = TokenFoT
@@ -220,7 +249,7 @@ func Tokens(txs []*Tx) map[string]*TokenEvidence {
 			e.Status = TokenVerified
 		}
 	}
-	return ev
+	return a.ev
 }
 
 // SortedTokens returns evidence in token order (determinism).

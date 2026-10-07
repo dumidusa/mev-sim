@@ -1,0 +1,91 @@
+run run-20261007T160554567-949b04c4 - top 5 economic opportunities
+==============================================================================
+#1  group 17975  net 173.385946 ETH  (USD 659667.021526)  stage EXECUTION_FEASIBLE
+    seen at block 20001723 after tx 0   class public   states 9
+    closed at block 20002758 after tx 56 by other_tx (0x9bec95a601068dc33bf2c350131195e27f4e9ef8a034dc4b471a3330844facc6)  lifetime 1508 blocks
+    L* 8.675379 ETH -> out 182.062110 ETH   gross 173.386731   gas 0.000785 ETH
+    hop 1  pool 0x80b4d4e9d88d9f78198c56c5a27f3bacb9a685c5  uniswap_v2  discovered_by=probe  syncs_in_range=218 (blocks 20000398..20050131)
+           0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2 -> 0xf65b5c5104c4fafd4b709d9d60a185eae063276c   in 8675379381370967808  out 148880414489443017931277  (raw units)
+           reserves @end of 20001723: r0=128615308591595274900 r1=2440849125116141401276261  [RECONSTRUCTED]
+           token0 0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2 (WETH) status=anomalous  balance == reserve OK  [OBSERVED]
+           token1 0xf65b5c5104c4fafd4b709d9d60a185eae063276c (TRU) status=transfer_verified  balance == reserve OK  [OBSERVED]
+    hop 2  pool 0xafa43241cf1a1d12268e75f1e7258b805e708da5  sushiswap  discovered_by=probe  syncs_in_range=20 (blocks 20001723..20042207)
+           0xf65b5c5104c4fafd4b709d9d60a185eae063276c -> 0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2   in 148880414489443017931277  out 182062110218041787425  (raw units)
+           reserves @end of 20001723: r0=9009415099896570486 r1=169615664481402777746052  [RECONSTRUCTED]
+           token0 0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2 (WETH) status=anomalous  balance == reserve OK  [OBSERVED]
+           token1 0xf65b5c5104c4fafd4b709d9d60a185eae063276c (TRU) status=transfer_verified  balance == reserve OK  [OBSERVED]
+==============================================================================
+#2  group 18042  net 41.910626 ETH  (USD 159307.453301)  stage EXECUTION_FEASIBLE
+    seen at block 20004037 after tx 0   class backrun_only   states 1
+    closed at block 20004037 after tx 3 by other_tx (0xb87eb628b85da61bf97173fafdca905c3b6adf2c33ca821d6a2bf47ba5f6c9cf)  lifetime 0 blocks
+    L* 2.102646 ETH -> out 44.015639 ETH   gross 41.912993   gas 0.002367 ETH
+    hop 1  pool 0xa14e051af256157ce093aa54cb3b2f775358f559  uniswap_v2  discovered_by=probe  syncs_in_range=14 (blocks 20000774..20033627)
+           0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2 -> 0x7659ce147d0e714454073a5dd7003544234b6aa0   in 2102645850515044173  out 3737879515103760620866  (raw units)
+           reserves @end of 20004037: r0=6113127731977674898942 r1=1332125037634743527  [RECONSTRUCTED]
+           token0 0x7659ce147d0e714454073a5dd7003544234b6aa0 (XCAD) status=transfer_verified  balance == reserve OK  [OBSERVED]
+           token1 0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2 (WETH) status=anomalous  balance == reserve OK  [OBSERVED]
+    hop 2  pool 0x6f118ecebc31a5ffe49b87c47ea80f93a2af0a8a  uniswap_v2  discovered_by=probe  syncs_in_range=13 (blocks 20001013..20048791)
+           0x7659ce147d0e714454073a5dd7003544234b6aa0 -> 0xdac17f958d2ee523a2206206994597c13d831ec7   in 3737879515103760620866  out 168183955527  (raw units)
+           reserves @end of 20004037: r0=11381244720259227983595 r1=8859857309  [RECONSTRUCTED]
+           token0 0x7659ce147d0e714454073a5dd7003544234b6aa0 (XCAD) status=transfer_verified  balance == reserve OK  [OBSERVED]
+           token1 0xdac17f958d2ee523a2206206994597c13d831ec7 (USDT) status=transfer_verified  balance == reserve OK  [OBSERVED]
+    hop 3  pool 0x0d4a11d5eeaac28ec3f61d100daf4d40471f1852  uniswap_v2  discovered_by=probe  syncs_in_range=29009 (blocks 20000001..20050397)
+           0xdac17f958d2ee523a2206206994597c13d831ec7 -> 0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2   in 168183955527  out 44015639208573292750  (raw units)
+           reserves @end of 20004037: r0=15267093535888659883668 r1=57992946813646  [RECONSTRUCTED]
+           token0 0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2 (WETH) status=anomalous  balance == reserve OK  [OBSERVED]
+           token1 0xdac17f958d2ee523a2206206994597c13d831ec7 (USDT) status=transfer_verified  balance == reserve OK  [OBSERVED]
+==============================================================================
+#3  group 18154  net 38.522703 ETH  (USD 146325.884073)  stage EXECUTION_FEASIBLE
+    seen at block 20008633 after tx 0   class backrun_only   states 2
+    closed at block 20008633 after tx 5 by other_tx (0xc3caa8ffe5191f0cd8eb6af76814af89c4feb7998f7578b55dfba2741f20b1f4)  lifetime 0 blocks
+    L* 4.619547 ETH -> out 43.145105 ETH   gross 38.525558   gas 0.002855 ETH
+    hop 1  pool 0x0d4a11d5eeaac28ec3f61d100daf4d40471f1852  uniswap_v2  discovered_by=probe  syncs_in_range=29009 (blocks 20000001..20050397)
+           0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2 -> 0xdac17f958d2ee523a2206206994597c13d831ec7   in 4619547375249800049  out 17506156444  (raw units)
+           reserves @end of 20008633: r0=15262002183069428696290 r1=58026021167661  [RECONSTRUCTED]
+           token0 0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2 (WETH) status=anomalous  balance == reserve OK  [OBSERVED]
+           token1 0xdac17f958d2ee523a2206206994597c13d831ec7 (USDT) status=transfer_verified  balance == reserve OK  [OBSERVED]
+    hop 2  pool 0xde6faedbcae38eec6d33ad61473a04a6dd7f6e28  uniswap_v2  discovered_by=probe  syncs_in_range=26 (blocks 20021986..20049561)
+           0xdac17f958d2ee523a2206206994597c13d831ec7 -> 0x43a96962254855f16b925556f9e97be436a43448   in 17506156444  out 1207818956469359587728314  (raw units)
+           reserves @end of 20008633: r0=5752363029976802052642480 r1=65671122807  [RECONSTRUCTED]
+           token0 0x43a96962254855f16b925556f9e97be436a43448 (HORD) status=transfer_verified  balance == reserve OK  [OBSERVED]
+           token1 0xdac17f958d2ee523a2206206994597c13d831ec7 (USDT) status=transfer_verified  balance == reserve OK  [OBSERVED]
+    hop 3  pool 0xbaa48ef52fe0cf3a2682c1247b18d4274a988132  uniswap_v2  discovered_by=probe  syncs_in_range=19 (blocks 20004136..20041570)
+           0x43a96962254855f16b925556f9e97be436a43448 -> 0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2   in 1207818956469359587728314  out 43145105265815406517  (raw units)
+           reserves @end of 20008633: r0=1774234269294706882642858 r1=5327231701859228607  [RECONSTRUCTED]
+           token0 0x43a96962254855f16b925556f9e97be436a43448 (HORD) status=transfer_verified  balance == reserve OK  [OBSERVED]
+           token1 0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2 (WETH) status=anomalous  balance == reserve OK  [OBSERVED]
+==============================================================================
+#4  group 18988  net 25.580555 ETH  (USD 93052.415499)  stage EXECUTION_FEASIBLE
+    seen at block 20041681 after tx 0   class backrun_only   states 2
+    closed at block 20041681 after tx 2 by arb_tx (0x6583bea827e99e1f3d5d69f29800c68c4d31f2141c2e905037054a5f5e03f4a2)  lifetime 0 blocks
+    L* 39.212863 ETH -> out 64.806576 ETH   gross 25.593713   gas 0.013158 ETH
+    hop 1  pool 0xc5be99a02c6857f9eac67bbce58df5572498f40c  uniswap_v2  discovered_by=probe  syncs_in_range=811 (blocks 20000248..20050334)
+           0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2 -> 0xd46ba6d942050d489dbd938a2c909a5d5039a161   in 39212862914031239834  out 110559232090492  (raw units)
+           reserves @end of 20041681: r0=1622175817784095608372 r1=4559941708996176  [RECONSTRUCTED]
+           token0 0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2 (WETH) status=anomalous  balance == reserve OK  [OBSERVED]
+           token1 0xd46ba6d942050d489dbd938a2c909a5d5039a161 (AMPL) status=transfer_verified  balance == reserve OK  [OBSERVED]
+    hop 2  pool 0xcb2286d9471cc185281c4f763d34a962ed212962  sushiswap  discovered_by=probe  syncs_in_range=113 (blocks 20000033..20050024)
+           0xd46ba6d942050d489dbd938a2c909a5d5039a161 -> 0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2   in 110559232090492  out 64806575561691841627  (raw units)
+           reserves @end of 20041681: r0=104726611269988038011 r1=292970333715393  [RECONSTRUCTED]
+           token0 0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2 (WETH) status=anomalous  balance == reserve OK  [OBSERVED]
+           token1 0xd46ba6d942050d489dbd938a2c909a5d5039a161 (AMPL) status=transfer_verified  balance == reserve OK  [OBSERVED]
+==============================================================================
+#5  group 18904  net 24.940313 ETH  (USD 95405.193005)  stage EXECUTION_FEASIBLE
+    seen at block 20039788 after tx 10   class backrun_only   states 2
+    closed at block 20039788 after tx 13 by other_tx (0x9f8d80f8086bbd71f2b4b2b3aee5c4ee6c265b464ff97fe3a0f1991ccbb3ae12)  lifetime 0 blocks
+    L* 19.547248 ETH -> out 44.490591 ETH   gross 24.943343   gas 0.003030 ETH
+    hop 1  pool 0xe45b4a84e0ad24b8617a489d743c52b84b7acebe  uniswap_v2  discovered_by=probe  syncs_in_range=856 (blocks 20000002..20050268)
+           0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2 -> 0x5b7533812759b45c2b44c19e320ba2cd2681b542   in 19547248254627833755  out 7522673351235  (raw units)
+           reserves @end of 20039788: r0=58104912846804 r1=131450585729622964074  [RECONSTRUCTED]
+           token0 0x5b7533812759b45c2b44c19e320ba2cd2681b542 (AGIX) status=transfer_verified  balance == reserve OK  [OBSERVED]
+           token1 0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2 (WETH) status=anomalous  balance == reserve OK  [OBSERVED]
+    hop 2  pool 0x4bb0925fa50da9b4c8936869433b48e78ccc5c13  uniswap_v2  discovered_by=probe  syncs_in_range=116 (blocks 20000002..20049989)
+           0x5b7533812759b45c2b44c19e320ba2cd2681b542 -> 0xdac17f958d2ee523a2206206994597c13d831ec7   in 7522673351235  out 171362211532  (raw units)
+           reserves @end of 20039788: r0=17512214226387 r1=152500604037  [RECONSTRUCTED]
+           token0 0x5b7533812759b45c2b44c19e320ba2cd2681b542 (AGIX) status=transfer_verified  balance == reserve OK  [OBSERVED]
+           token1 0xdac17f958d2ee523a2206206994597c13d831ec7 (USDT) status=transfer_verified  balance == reserve OK  [OBSERVED]
+    hop 3  pool 0x0d4a11d5eeaac28ec3f61d100daf4d40471f1852  uniswap_v2  discovered_by=probe  syncs_in_range=29009 (blocks 20000001..20050397)
+           0xdac17f958d2ee523a2206206994597c13d831ec7 -> 0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2   in 171362211532  out 44490591234229996910  (raw units)
+           reserves @end of 20039788: r0=15220526606654759661876 r1=58271736838155  [RECONSTRUCTED]
+           token0 0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2 (WETH) status=anomalous  balance == reserve OK  [OBSERVED]
+           token1 0xdac17f958d2ee523a2206206994597c13d831ec7 (USDT) status=transfer_verified  balance == reserve OK  [OBSERVED]

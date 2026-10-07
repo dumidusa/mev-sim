@@ -190,3 +190,20 @@ Route enumeration and canonicalization (no rotation duplicates, both directions,
 - No result is "all Ethereum MEV". The report says **"historically observed opportunity within the modeled universe"**.
 - A 301-block sample (~1 hour) is printed with a **SAMPLE TOO SMALL** warning next to every per-day or per-month figure.
 - Without competition modelling, the deepest stage is EXECUTION_FEASIBLE. "Captured" is not computed.
+
+## Memory (long ranges)
+
+A week has ~1.6M swaps and millions of candidate states. Holding them all
+in RAM got the process killed by macOS. Now:
+
+```
+swaps      -> streamed one tx at a time (only on-chain arbs + token counters kept)
+candidate  -> final row written to data/mevsim-cands-*.gob.gz (gzip, id order)
+           -> kept in memory ONLY if an episode points at it (first / best / first-valid)
+           -> funnel + reason counts aggregated on the fly
+results hash -> candidate rows hashed while written (no re-read)
+save       -> streams the file into scan_candidates, then the file is deleted
+```
+
+Memory now grows with episodes, not with candidate states. `--mem-limit-gb`
+(default 3) sets the Go GC soft limit. The progress line shows heap MB.

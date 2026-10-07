@@ -1,3 +1,22 @@
+# build output
 bin/
-*.db
+
+# data (large, and may contain RPC-derived state)
 data/
+bq/
+*.db
+*.db-*
+*.gob.gz
+
+# python
+.venv/
+__pycache__/
+
+# secrets
+.env
+*.key
+
+# OS / editor
+.DS_Store
+.vscode/
+.idea/

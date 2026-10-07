@@ -59,17 +59,9 @@ func (r *Result) ConfigJSON() string {
 // same config + same code must give the same hash.
 func (r *Result) ResultsHash() string {
 	h := sha256.New()
-	w := func(parts ...any) {
-		for _, p := range parts {
-			fmt.Fprint(h, p, "\x1f")
-		}
-		fmt.Fprint(h, "\x1e")
-	}
-	for _, c := range r.Cands {
-		w("c", c.ID, r.Set.Routes[c.Route].RouteID, c.Point, c.TriggerTx, c.Fingerprint, c.Stage, c.Reason,
-			s(c.L), s(c.Out), s(c.Gross), s(c.FlashFee), c.GasUsed, s(c.BaseFee), s(c.Priority), s(c.GasCost),
-			s(c.Builder), s(c.Net), ratStr(c.NetUSD), c.Episode)
-	}
+	w := func(parts ...any) { hashRow(h, parts...) }
+	// candidates were hashed row by row while the scan wrote them to disk
+	w("cands", r.NCands, r.candHash)
 	for _, e := range r.Episodes {
 		cl := "-"
 		if e.Closed != nil {
@@ -130,8 +122,9 @@ func Save(st *store.Store, r *Result, codeVersion string) (RunMeta, error) {
 				return err
 			}
 		}
-		for _, c := range r.Cands {
-			var hops, curve []map[string]string
+		var hops, curve []map[string]string
+		if err := r.Each(func(c *Candidate) error {
+			hops, curve = hops[:0], curve[:0]
 			for _, h := range c.Hops {
 				hops = append(hops, map[string]string{"pool": h.Pool, "in_token": h.TokenIn, "out_token": h.TokenOut,
 					"in": s(h.In), "out": s(h.Out), "pool_fee_in_token": s(h.PoolFee)})
@@ -155,6 +148,9 @@ func Save(st *store.Store, r *Result, codeVersion string) (RunMeta, error) {
 				c.UnverifiedTokens, ep, js(hops), js(curve), js(c.Provenance)); err != nil {
 				return err
 			}
+			return nil
+		}); err != nil {
+			return err
 		}
 		for _, e := range r.Episodes {
 			var cb, ca any

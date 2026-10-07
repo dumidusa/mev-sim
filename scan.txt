@@ -1,0 +1,202 @@
+========================================================================
+HISTORICAL ARBITRAGE SCAN  (historically observed opportunity within the modeled universe)
+========================================================================
+run           run-20261007T160554567-949b04c4
+code          55afb80-dirty
+data hash     187dd72ef0fcb41ec7cfbd02d40b4e20079a55ec32c9e41d9af9f0c853b3784b
+results hash  5a9901f6714ad4cf6d95000011920c7997402d96a0db56d865773df2db5bd30e
+
+Blocks:                  20000000 -> 20050399 (50400 blocks, 168.88 hours)
+States scanned:          1383347 tx boundaries (+1 start state)
+Pools modeled:           11939  (1421 on a cycle after 2-core pruning)
+Routes enumerated:       2670  (2-hop 438, 3-hop 2232), anchor 0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2
+Route evaluations:       16910192   (same-state skips 1386, inactive 912)
+
+------------------------------------------------------------------------
+FUNNEL  (each level removes exactly one thing)
+------------------------------------------------------------------------
+route evaluations                   16910192
+  no price discrepancy              11287768    66.8%  (exact screen: provably unprofitable)
+DETECTED (discrepancy > pool fees)   5622424
+SIMULATED (sized exactly)            4823947
+GROSS_PROFITABLE                     4789699
+FLASH_LOAN_PROFITABLE                4789699
+GAS_PROFITABLE                         10085
+ECONOMICALLY_VALID                     10085
+EXECUTION_FEASIBLE                     10085
+COMPETITION                        NOT MODELED
+
+rejection reasons (candidate states):
+  gas_exceeds_profit               at FLASH_LOAN_PROFITABLE    4779614
+  unsupported_token_behavior       at DETECTED                  695788
+  numerical_constraint             at DETECTED                  102689
+  no_gross_profit                  at SIMULATED                  34248
+
+------------------------------------------------------------------------
+DEDUPLICATION  (states -> episodes -> opportunities)
+------------------------------------------------------------------------
+candidate states (DETECTED)                    5622424
+episodes (route stays gross-profitable)          30307
+  of which reach ECONOMICALLY_VALID               1993
+gross opportunities (groups by first state)      17913
+ECONOMIC OPPORTUNITIES (valid groups)             1305   <- primary count
+  of which EXECUTION_FEASIBLE                     1305
+
+------------------------------------------------------------------------
+PROFIT DISTRIBUTION  (net per opportunity, value at first valid state)
+------------------------------------------------------------------------
+Mean:                      0.681128 ETH
+P25:                       0.000716 ETH
+Median:                    0.002677 ETH
+P75:                       0.013891 ETH
+P90:                       0.149072 ETH
+P95:                       1.177413 ETH
+P99:                       18.251339 ETH
+P99.9:                     41.910626 ETH
+Maximum:                   173.385946 ETH
+
+Cost breakdown (same 1305 opportunities):
+  Gross profit:            892.123962 ETH   (DEX fees + price impact already inside: EXACT)
+  - Flash-loan fees:       0.000000 ETH
+  - Gas:                   3.251929 ETH
+  - Builder payments:      0.000000 ETH
+  = Total net profit:      888.872034 ETH   <- primary
+
+Net upper bound:           1538.789099 ETH   (UPPER BOUND: best state of every episode; hindsight + overlap)
+Gross at first appearance: 371.053189 ETH   (all 17913 gross opportunities at the state they FIRST appeared)
+Total net profit (USD):    $3354632.42
+
+------------------------------------------------------------------------
+OPPORTUNITY RATE
+------------------------------------------------------------------------
+Opportunities/block:      0.0259
+Net profit/block:         0.017636 ETH
+Opportunities/day:        185.5
+Net profit/day:           126.322536 ETH
+Net profit/day (USD):     $476745.42
+Monthly equivalent (USD): $14302362.74
+
+------------------------------------------------------------------------
+PROFIT CONCENTRATION
+------------------------------------------------------------------------
+Top    1% (   14 opps):      53.6% of total net
+Top    5% (   66 opps):      95.5% of total net
+Top   10% (  131 opps):      98.8% of total net
+Top   50% (  653 opps):      99.9% of total net
+Opportunities making 50% of profit: 13 of 1305
+Gini coefficient:         0.968
+
+------------------------------------------------------------------------
+CAPITAL  (flash-loan input L* of each opportunity)
+------------------------------------------------------------------------
+Median required capital:  0.152700 ETH
+P99 required capital:     6.089870 ETH
+Max required capital:     39.212863 ETH
+Median net/capital:       1.6638%
+Own capital needed:       0 with a flash loan (lender liquidity: OBSERVED: Balancer V2 flash fee + vault WETH balance at block 19999999 (held constant over the range))
+Opportunity lifetime:     median 2 blocks, max 45738 (closed ones; 17 still open at end)
+
+------------------------------------------------------------------------
+VISIBILITY & OBSERVED COMPETITION EVIDENCE
+------------------------------------------------------------------------
+start_state        31 opps   68.910261 ETH
+public            759 opps   481.393505 ETH
+backrun_only      515 opps   338.568268 ETH
+  backrun_only = existed only right after a tx inside its block: capturable only by
+  a searcher who saw that tx before inclusion (public mempool). NOT AVAILABLE: whether it was public.
+
+how opportunities ended (OBSERVED):
+  closed by an on-chain arbitrage tx     171   13.1%
+  closed by another tx                  1117   85.6%
+  still open at end of range              17    1.3%
+Competition model:        NOT MODELED (captured share cannot be computed yet)
+
+------------------------------------------------------------------------
+SENSITIVITY: builder payment (same opportunities, net recomputed from pre-builder profit)
+------------------------------------------------------------------------
+builder share   0.0%:     1305 opps   total net 888.872034 ETH
+builder share  50.0%:     1305 opps   total net 444.436017 ETH
+builder share  90.0%:     1305 opps   total net 88.887203 ETH
+builder share  99.0%:     1305 opps   total net 8.888720 ETH
+
+------------------------------------------------------------------------
+TOKEN BEHAVIOUR  (from pool->pool swap chains, OBSERVED)
+------------------------------------------------------------------------
+fee_on_transfer 40, anomalous 22, transfer_verified 447 (tokens never seen in a chain: unverified)
+opportunities through >=1 UNVERIFIED token: 68 of 1305, 2.6% of total net
+  (unverified = may be honeypot / fee-on-transfer / blacklist; profit may not be real)
+
+------------------------------------------------------------------------
+HISTORICAL ARBITRAGE VALIDATION  (on-chain closed V2 cycles in this range)
+------------------------------------------------------------------------
+tx patterns: cycle_profit 1318, cycle_loss 322, open_chain 93525, unchained 83328, pool_repeat 919, multi_sided 2124, single 1195596
+  open_chain = normal multi-hop trade OR arbitrage with unmodeled (e.g. V3) legs: indistinguishable without traces
+known arbitrage cycles:   1361
+hop replay (observed in -> model out):  exact 540, below max 818, ABOVE MODEL (model error) 3, other 0
+route replay (chained):                 exact 461, differs 900
+in scanner route set:     1048
+recognized by scanner:    310   ( 22.8%)
+not recognized:           1051
+    hops_4_exceed_max_3                      284
+    hops_5_exceed_max_3                      16
+    hops_6_exceed_max_3                      3
+    hops_7_exceed_max_3                      1
+    no_anchor_token_in_cycle                 9
+    screen_no_discrepancy                    10
+    unsupported_token_behavior               728
+observed gross (anchor-start cycles):  175.529733 ETH  [OBSERVED, before gas]
+scanner optimum >= observed gross:      149 of 152; short by <= hops units 2 (max 81331311 wei); WORSE 1
+observed gasUsed 2-hop:  median 130545, n=183  [OBSERVED]
+observed gasUsed 3-hop:  median 234028, n=874  [OBSERVED]
+observed gasUsed 4-hop:  median 286205, n=284  [OBSERVED]
+observed gasUsed 5-hop:  median 322295, n=16  [OBSERVED]
+observed gasUsed 6-hop:  median 331957, n=3  [OBSERVED]
+observed gasUsed 7-hop:  median 490794, n=1  [OBSERVED]
+observed priority fee:    median 1.573 gwei, n=1361  [OBSERVED; coinbase transfers NOT AVAILABLE]
+scanner episodes closed by these txs: 555
+
+------------------------------------------------------------------------
+COVERAGE  (what this scan does NOT see)
+------------------------------------------------------------------------
+Modeled V2 universe:      11939 pools (Uniswap V2 + SushiSwap), 11148 tokens
+Other V2-like factories:  577 active pools probed, NOT modeled
+    0x115934131916c8b277dd010ee02de363c09d037c  109 pools
+    0x9deb29c9a4c7a88a3c0257393b7f3335338d9a9d  37 pools
+    0x2d723f60ad8da76286b2ac120498a5ea6babc792  31 pools
+    0xcbae5c3f8259181eb7e2309bc4c72fdf02dd56d8  27 pools
+    0x1097053fd2ea711dad45caccc45eff7548fcb362  24 pools
+Non-pair Sync emitters:   33
+Untracked Sync logs:      13345 from 585 contracts
+Unsupported DEX types:    Uniswap V3/V4, Curve, Balancer pools, CEX prices: NOT MODELED
+Pools inactive in range:  NOT DISCOVERED (no events = not ingested)
+
+------------------------------------------------------------------------
+ASSUMPTIONS & PROVENANCE
+------------------------------------------------------------------------
+gas used (our tx):        2-hop 130185, 3-hop 230146  [ESTIMATED] median gasUsed of observed on-chain V2 arbitrage txs in range ([2-hop: median 130185 of 179 obs 3-hop: median 230146 of 814 obs 4-hop: median 285903 of 265 obs 5-hop: median 322295 of 16 obs 6-hop: median 331957 of 3 obs 7-hop: only 1 obs (unavailable)]); flash-loan overhead not included
+priority fee:             1.557 gwei  [ESTIMATED] median (effectiveGasPrice - baseFee) of 1318 observed arbitrage txs; coinbase transfers NOT AVAILABLE
+base fee:                 per block  [OBSERVED]
+flash loan:               balancer_v2 fee 0/1000000000000000000, liquidity 39035.745598 ETH  [OBSERVED: Balancer V2 flash fee + vault WETH balance at block 19999999 (held constant over the range)]
+builder payment:          0 bps of profit after gas  [ASSUMED]
+min net profit:           1 wei  [ASSUMED]
+ETH/USD:                  V2 pool 0xb4e16d0168e52d35cacd2c6185b44281ec28c9dc mid-price at top of block  [HISTORICALLY_RECONSTRUCTED]
+sizing:                   EXACT integer V2 math; L* within <= hops base units of integer optimum
+competition:              NOT MODELED
+
+------------------------------------------------------------------------
+$100K/MONTH ANALYSIS  (from measured distribution only)
+------------------------------------------------------------------------
+Required daily profit:          $3333.33
+Observed net/day (100% capture): $476745.42
+Monthly equivalent:             $14302362.74
+Required capture rate:          0.7% of all measured opportunities
+Avg net per opportunity:        $2570.60
+Executions/day needed at avg:   1.3   (measured: 185.5 opportunities/day)
+
+Scenarios (derived from this run's measured opportunity set):
+  extreme: capture 100%, builder as configured           $14302362.74/mo  (14302.4% of target)
+  strong: public + start_state only (no mempool needed)    $8841215.67/mo  (8841.2% of target)
+  median: verified tokens only                           $13932805.46/mo  (13932.8% of target)
+  conservative: no top-1%, verified tokens, 10% capture     $653346.25/mo  (653.3% of target)
+  (capture rates are inputs, not measurements; competition is NOT MODELED)
+========================================================================

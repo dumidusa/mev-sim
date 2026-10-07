@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"fmt"
 	"math/big"
+	"runtime"
 	"sort"
 	"sync"
 	"time"
@@ -77,7 +78,12 @@ type ArbResult struct {
 type Result struct {
 	Cfg        Config
 	Set        *graph.Set
-	Cands      []*Candidate
+	Kept       []*Candidate // indexed by candidate id; nil = released (full record on disk, see Each)
+	NCands     int
+	Funnel     map[lifecycle.Stage]int // candidates reaching each stage
+	Reasons    map[string]int          // "reason at stage" -> candidates
+	spill      *spill
+	candHash   string
 	Episodes   []*Episode
 	Groups     []*Group
 	Arbs       []*ArbResult
@@ -139,7 +145,8 @@ func Run(st *store.Store, cfg Config) (*Result, error) {
 	if cfg.MaxHops < 2 {
 		return nil, fmt.Errorf("max-hops must be >= 2")
 	}
-	s := &scanner{st: st, cfg: cfg, res: &Result{Metrics: map[string]int64{}, Patterns: map[string]int{}}}
+	s := &scanner{st: st, cfg: cfg, res: &Result{Metrics: map[string]int64{}, Patterns: map[string]int{},
+		Funnel: map[lifecycle.Stage]int{}, Reasons: map[string]int{}}}
 	var err error
 	if s.pools, err = st.Pools(); err != nil {
 		return nil, err
@@ -162,23 +169,25 @@ func Run(st *store.Store, cfg Config) (*Result, error) {
 	}
 	say("loading swaps (token behaviour + on-chain arbitrage detection)...")
 	// --- observed history: swaps, token behaviour, on-chain arbitrage ---
-	txs, err := histarb.Load(st, cfg.Start, cfg.End)
-	if err != nil {
-		return nil, err
-	}
-	ev := histarb.Tokens(txs)
-	s.res.Tokens = histarb.SortedTokens(ev)
-	tokStatus := map[string]string{}
-	for t, e := range ev {
-		tokStatus[t] = e.Status
-	}
+	acc := histarb.NewTokenAcc()
 	s.arbsByTx = map[[2]uint64][]histarb.Arb{}
-	for _, tx := range txs {
+	err = histarb.Stream(st, cfg.Start, cfg.End, func(tx *histarb.Tx) error {
+		acc.Add(tx)
 		pat, arbs := histarb.Classify(tx)
 		s.res.Patterns[pat]++
 		if len(arbs) > 0 {
 			s.arbsByTx[[2]uint64{tx.Block, tx.TxIndex}] = arbs
 		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	ev := acc.Result()
+	s.res.Tokens = histarb.SortedTokens(ev)
+	tokStatus := map[string]string{}
+	for t, e := range ev {
+		tokStatus[t] = e.Status
 	}
 
 	// --- blocks (base fee OBSERVED) ---
@@ -260,6 +269,16 @@ func Run(st *store.Store, cfg Config) (*Result, error) {
 		}
 	}
 
+	if s.res.spill, err = newSpill(cfg.SpillDir); err != nil {
+		return nil, err
+	}
+	success := false
+	defer func() {
+		if !success {
+			s.res.Close()
+		}
+	}()
+
 	say("evaluating start state (all routes)...")
 	// --- scan ---
 	s.initial = Point{cfg.Start, -1}
@@ -283,9 +302,11 @@ func Run(st *store.Store, cfg Config) (*Result, error) {
 		lastLog = time.Now()
 		done := float64(b-cfg.Start+1) / float64(cfg.End-cfg.Start+1)
 		eta := time.Duration(float64(time.Since(t0)) * (1 - done) / done)
-		cfg.Progress(fmt.Sprintf("scan: block %d / %d (%.1f%%)  evaluations %d  candidates %d  episodes %d  elapsed %s  ETA ~%s",
-			b, cfg.End, done*100, s.res.Metrics["route_evaluations"], len(s.res.Cands), len(s.res.Episodes),
-			time.Since(t0).Round(time.Second), eta.Round(time.Second)))
+		var ms runtime.MemStats
+		runtime.ReadMemStats(&ms)
+		cfg.Progress(fmt.Sprintf("scan: block %d / %d (%.1f%%)  evaluations %d  candidates %d  episodes %d  mem %d MB  elapsed %s  ETA ~%s",
+			b, cfg.End, done*100, s.res.Metrics["route_evaluations"], s.res.NCands, len(s.res.Episodes),
+			ms.HeapAlloc>>20, time.Since(t0).Round(time.Second), eta.Round(time.Second)))
 	}
 	changed := map[string]bool{}
 	curBlock := cfg.Start
@@ -342,8 +363,13 @@ func Run(st *store.Store, cfg Config) (*Result, error) {
 	if err := flush(); err != nil {
 		return nil, err
 	}
+	if err := s.res.spill.close(); err != nil {
+		return nil, err
+	}
+	s.res.candHash = s.res.spill.sum()
 	s.finish(curBlock)
 	s.groups()
+	success = true
 	return s.res, nil
 }
 
@@ -472,8 +498,9 @@ func (s *scanner) scanPoint(pt Point, trigger string, routes []int, triggerIsArb
 		if c == nil {
 			s.metric("no_discrepancy", 1)
 		} else {
-			c.ID, c.Route, c.TriggerTx, c.Fingerprint = len(s.res.Cands), ri, trigger, fp
-			s.res.Cands = append(s.res.Cands, c)
+			c.ID, c.Route, c.TriggerTx, c.Fingerprint = s.res.NCands, ri, trigger, fp
+			s.res.NCands++
+			s.res.Kept = append(s.res.Kept, c)
 			profitable = c.reached(lifecycle.GrossProfitable)
 		}
 		ei := s.open[ri]
@@ -496,16 +523,55 @@ func (s *scanner) scanPoint(pt Point, trigger string, routes []int, triggerIsArb
 			}
 			s.open[ri] = -1
 		}
+		if c != nil {
+			if err := s.finalize(c); err != nil {
+				return err
+			}
+		}
 	}
 	return nil
+}
+
+// finalize: the candidate's row is complete (stage, reason, episode). Count
+// it, write it to disk, and keep it in memory only while an episode points
+// at it (first / best / first-valid state).
+func (s *scanner) finalize(c *Candidate) error {
+	for _, st := range lifecycle.ScanOrder {
+		if c.reached(st) {
+			s.res.Funnel[st]++
+		}
+	}
+	if c.Reason != "" {
+		s.res.Reasons[fmt.Sprintf("%-32s at %s", c.Reason, c.Stage)]++
+	}
+	if err := s.res.spill.write(c, s.set.Routes[c.Route].RouteID); err != nil {
+		return err
+	}
+	// the full row is on disk; in memory keep only what episodes, groups and the report read
+	c.Hops, c.Curve, c.Provenance, c.Detail, c.TriggerTx, c.Fingerprint = nil, nil, nil, "", "", ""
+	c.RateNum, c.RateDen, c.Out = nil, nil, nil
+	if c.Episode < 0 {
+		s.res.Kept[c.ID] = nil
+		return nil
+	}
+	s.release(s.res.Episodes[c.Episode], c.ID)
+	return nil
+}
+
+func (s *scanner) release(e *Episode, id int) {
+	if id != e.FirstCand && id != e.BestCand && id != e.FirstValidCand {
+		s.res.Kept[id] = nil
+	}
 }
 
 func (s *scanner) addState(e *Episode, c *Candidate) {
 	c.Episode = e.ID
 	e.States++
 	e.Last = c.Point
-	if b := s.res.Cands[e.BestCand]; netOrGross(c).Cmp(netOrGross(b)) > 0 {
+	if b := s.res.Kept[e.BestCand]; netOrGross(c).Cmp(netOrGross(b)) > 0 {
+		old := e.BestCand
 		e.BestCand = c.ID
+		s.release(e, old)
 	}
 	if e.FirstValidCand < 0 && c.reached(lifecycle.EconomicallyValid) {
 		e.FirstValidCand = c.ID
@@ -772,7 +838,7 @@ func (s *scanner) groups() {
 				for _, id := range g.Members {
 					e := s.res.Episodes[id]
 					_, ci, _ := at(e)
-					c := s.res.Cands[ci]
+					c := s.res.Kept[ci]
 					v := c.Gross
 					if kind == "valid" {
 						v = c.Net
@@ -796,7 +862,7 @@ func (s *scanner) groups() {
 		if e.FirstValidCand < 0 {
 			return Point{}, 0, false
 		}
-		return s.res.Cands[e.FirstValidCand].Point, e.FirstValidCand, true
+		return s.res.Kept[e.FirstValidCand].Point, e.FirstValidCand, true
 	})
 }
 

@@ -38,6 +38,7 @@ No "X% accurate". Correctness is shown by tests that can fail.
 | Scan | same data + config → same results hash; config change → different hash | exact | ✅ |
 | Scan | no silent drops: evaluations = no_discrepancy + candidates; every non-final candidate has a reason | exact | ✅ |
 | Scan | unknown lender liquidity never EXECUTION_FEASIBLE | — | ✅ |
+| Scan | candidate file on disk is lossless: re-hash from disk == hash during scan; every candidate an episode/group needs stays in memory | exact | ✅ |
 | Dedup | groups: shared pool + same point → 1; disjoint or later point → separate | exact | ✅ |
 | Tokens | fee-on-transfer detected from pool→pool chains; FoT routes never pass DETECTED | — | ✅ devnet |
 | **Arb replay** | on-chain closed cycles detected; per-hop model out == observed out; chained route == observed final | 66/66 bot arbs, 0 wei | ✅ devnet · ⏳ mainnet |

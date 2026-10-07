@@ -2,6 +2,8 @@ package scan
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"math/big"
 	"path/filepath"
 	"strings"
@@ -77,7 +79,7 @@ func TestScanDevnetGroundTruth(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Logf("routes=%d cands=%d episodes=%d groups=%d arbs=%d metrics=%v patterns=%v",
-		len(res.Set.Routes), len(res.Cands), len(res.Episodes), len(res.Groups), len(res.Arbs), res.Metrics, res.Patterns)
+		len(res.Set.Routes), res.NCands, len(res.Episodes), len(res.Groups), len(res.Arbs), res.Metrics, res.Patterns)
 
 	// 1. recall: every bot arbitrage in range is detected.
 	//    Non-bot detections must be genuine closed profitable cycles (users
@@ -157,7 +159,7 @@ func TestScanDevnetGroundTruth(t *testing.T) {
 	if !fot {
 		t.Fatal("fee-on-transfer token not detected")
 	}
-	for _, c := range res.Cands {
+	for _, c := range cands(t, res) {
 		for _, tk := range res.Set.Routes[c.Route].Tokens {
 			if tk == ethtest.FoTToken && c.Stage != lifecycle.Detected {
 				t.Fatalf("candidate through FoT token reached %s", c.Stage)
@@ -196,7 +198,7 @@ func TestCandidatesIndependentlyReproduced(t *testing.T) {
 		t.Fatal(err)
 	}
 	checked := 0
-	for _, c := range res.Cands {
+	for _, c := range cands(t, res) {
 		gr := res.Set.Routes[c.Route]
 		snap, skipped, err := rd.Snapshot(gr.Pools, c.Point.Block, uint64(c.Point.After+1))
 		if err != nil || len(skipped) > 0 {
@@ -264,8 +266,8 @@ func TestScanDeterministic(t *testing.T) {
 	}
 	var n int
 	f.st.DB.QueryRow(`SELECT COUNT(*) FROM scan_candidates WHERE run_id=?`, m.RunID).Scan(&n)
-	if n != len(a.Cands) {
-		t.Fatalf("saved %d of %d candidates", n, len(a.Cands))
+	if n != a.NCands {
+		t.Fatalf("saved %d of %d candidates", n, a.NCands)
 	}
 	if h, _ := f.st.Hash(); h != m.DataHash {
 		t.Fatal("saving a scan changed the ingested-data hash")
@@ -279,14 +281,14 @@ func TestNoSilentDrops(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, c := range res.Cands {
+	for _, c := range cands(t, res) {
 		if c.Stage != lifecycle.ExecutionFeasible && c.Reason == "" {
 			t.Fatalf("cand %d stopped at %s without reason", c.ID, c.Stage)
 		}
 	}
 	m := res.Metrics
-	if m["route_evaluations"] != m["no_discrepancy"]+int64(len(res.Cands)) {
-		t.Fatalf("evaluations %d != no_discrepancy %d + candidates %d", m["route_evaluations"], m["no_discrepancy"], len(res.Cands))
+	if m["route_evaluations"] != m["no_discrepancy"]+int64(res.NCands) {
+		t.Fatalf("evaluations %d != no_discrepancy %d + candidates %d", m["route_evaluations"], m["no_discrepancy"], res.NCands)
 	}
 }
 
@@ -300,7 +302,7 @@ func TestUnknownLiquidityNotFeasible(t *testing.T) {
 		t.Fatal(err)
 	}
 	valid := 0
-	for _, x := range res.Cands {
+	for _, x := range cands(t, res) {
 		if x.Stage == lifecycle.ExecutionFeasible {
 			t.Fatal("feasible without known lender liquidity")
 		}
@@ -323,7 +325,7 @@ func TestGroupingRules(t *testing.T) {
 	s := &scanner{set: &graph.Set{Routes: routes}, res: &Result{}}
 	mk := func(id, r int, pt Point, gross int64) {
 		c := &Candidate{ID: id, Route: r, Point: pt, Stage: lifecycle.EconomicallyValid, Gross: big.NewInt(gross), Net: big.NewInt(gross)}
-		s.res.Cands = append(s.res.Cands, c)
+		s.res.Kept = append(s.res.Kept, c)
 		s.res.Episodes = append(s.res.Episodes, &Episode{ID: id, Route: r, First: pt, FirstCand: id, BestCand: id, FirstValidCand: id})
 	}
 	p1, p2 := Point{10, 3}, Point{10, 5}
@@ -399,7 +401,7 @@ func TestUSDReconstructionAndReport(t *testing.T) {
 		t.Fatal(err)
 	}
 	n := 0
-	for _, x := range r2.Cands {
+	for _, x := range cands(t, r2) {
 		if x.Net == nil {
 			continue
 		}
@@ -419,5 +421,73 @@ func TestUSDReconstructionAndReport(t *testing.T) {
 	Report(&buf, r2, RunMeta{RunID: "t"})
 	if !strings.Contains(buf.String(), "Required daily profit:          $3333.33") {
 		t.Error("100K section not computed with USD")
+	}
+}
+
+// cands reads every candidate back from the on-disk record.
+func cands(t *testing.T, r *Result) []*Candidate {
+	t.Helper()
+	var out []*Candidate
+	if err := r.Each(func(c *Candidate) error { out = append(out, c); return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if len(out) != r.NCands {
+		t.Fatalf("read back %d of %d candidates", len(out), r.NCands)
+	}
+	return out
+}
+
+// The on-disk record is lossless: re-hashing what Each returns gives the hash
+// computed while scanning, and every candidate still in memory equals its
+// on-disk copy. Released candidates are never needed by episodes or groups.
+func TestCandidateSpillLossless(t *testing.T) {
+	f := devnet(t)
+	res, err := Run(f.st, baseCfg())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Close()
+	h := sha256.New()
+	all := cands(t, res)
+	for i, c := range all {
+		if c.ID != i {
+			t.Fatalf("id order: %d at %d", c.ID, i)
+		}
+		hashRow(h, "c", c.ID, res.Set.Routes[c.Route].RouteID, c.Point, c.TriggerTx, c.Fingerprint, c.Stage, c.Reason,
+			sv(c.L), sv(c.Out), sv(c.Gross), sv(c.FlashFee), c.GasUsed, sv(c.BaseFee), sv(c.Priority), sv(c.GasCost),
+			sv(c.Builder), sv(c.Net), ratStr(c.NetUSD), c.Episode)
+		if c.L != nil && len(c.Hops) == 0 {
+			t.Fatalf("cand %d: hop details lost on disk", c.ID)
+		}
+		if k := res.Kept[i]; k != nil {
+			if sv(k.Net) != sv(c.Net) || sv(k.Gross) != sv(c.Gross) || k.Stage != c.Stage || k.Point != c.Point {
+				t.Fatalf("cand %d: memory != disk", i)
+			}
+		}
+	}
+	if got := hex.EncodeToString(h.Sum(nil)); got != res.candHash {
+		t.Fatal("candidate hash from disk != hash computed during scan")
+	}
+	released := 0
+	for _, e := range res.Episodes {
+		for _, id := range []int{e.FirstCand, e.BestCand, e.FirstValidCand} {
+			if id >= 0 && res.Kept[id] == nil {
+				t.Fatalf("episode %d needs candidate %d but it was released", e.ID, id)
+			}
+		}
+	}
+	for _, g := range res.Groups {
+		if res.Kept[g.Cand] == nil {
+			t.Fatalf("group %d candidate released", g.ID)
+		}
+	}
+	for _, k := range res.Kept {
+		if k == nil {
+			released++
+		}
+	}
+	t.Logf("candidates %d, kept in memory %d, released %d", res.NCands, res.NCands-released, released)
+	if released == 0 {
+		t.Fatal("expected most candidates to be released from memory")
 	}
 }

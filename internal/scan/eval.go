@@ -80,6 +80,7 @@ type Config struct {
 	USDDecimals     int
 	Workers         int               // parallel route evaluations per point (results identical for any value)
 	Progress        func(line string) // optional progress output
+	SpillDir        string            // temp dir for the candidate file ("" = OS temp dir)
 }
 
 type HopDetail struct {

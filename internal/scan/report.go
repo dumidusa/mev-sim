@@ -85,7 +85,7 @@ func (r *Result) opportunities() []Opp {
 		if g.Kind != "valid" {
 			continue
 		}
-		out = append(out, Opp{G: g, C: r.Cands[g.Cand], E: r.Episodes[g.Best], Net: g.Value})
+		out = append(out, Opp{G: g, C: r.Kept[g.Cand], E: r.Episodes[g.Best], Net: g.Value})
 	}
 	return out
 }
@@ -135,18 +135,7 @@ func Report(w io.Writer, r *Result, m RunMeta) {
 
 	// ---- funnel ----
 	head("FUNNEL  (each level removes exactly one thing)")
-	reach := map[lifecycle.Stage]int{}
-	reasons := map[string]int{}
-	for _, c := range r.Cands {
-		for _, s := range lifecycle.ScanOrder {
-			if c.reached(s) {
-				reach[s]++
-			}
-		}
-		if c.Reason != "" {
-			reasons[fmt.Sprintf("%-32s at %s", c.Reason, c.Stage)]++
-		}
-	}
+	reach, reasons := r.Funnel, r.Reasons
 	ev := int(r.Metrics["route_evaluations"])
 	P("%-34s %9d", "route evaluations", ev)
 	P("%-34s %9d   %s  (exact screen: provably unprofitable)", "  no price discrepancy", r.Metrics["no_discrepancy"], pct(int(r.Metrics["no_discrepancy"]), ev))
@@ -181,7 +170,7 @@ func Report(w io.Writer, r *Result, m RunMeta) {
 	for _, e := range r.Episodes {
 		if e.FirstValidCand >= 0 {
 			validEp++
-			if r.Cands[e.FirstValidCand].reached(lifecycle.ExecutionFeasible) {
+			if r.Kept[e.FirstValidCand].reached(lifecycle.ExecutionFeasible) {
 				feasEp++
 			}
 		}
@@ -198,7 +187,7 @@ func Report(w io.Writer, r *Result, m RunMeta) {
 			vg++
 		}
 	}
-	P("%-44s %9d", "candidate states (DETECTED)", len(r.Cands))
+	P("%-44s %9d", "candidate states (DETECTED)", r.NCands)
 	P("%-44s %9d", "episodes (route stays gross-profitable)", len(r.Episodes))
 	P("%-44s %9d", "  of which reach ECONOMICALLY_VALID", validEp)
 	P("%-44s %9d", "gross opportunities (groups by first state)", gg)
@@ -246,7 +235,7 @@ func Report(w io.Writer, r *Result, m RunMeta) {
 	P("  %-24s %s   <- primary", "= Total net profit:", ethS(total))
 	upper := new(big.Int)
 	for _, e := range r.Episodes {
-		if c := r.Cands[e.BestCand]; c.Net != nil && c.Net.Sign() > 0 {
+		if c := r.Kept[e.BestCand]; c.Net != nil && c.Net.Sign() > 0 {
 			upper.Add(upper, c.Net)
 		}
 	}
