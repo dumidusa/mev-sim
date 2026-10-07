@@ -47,6 +47,19 @@ CREATE TABLE IF NOT EXISTS v2_swap (
 CREATE TABLE IF NOT EXISTS unknown_emitters (
   address TEXT NOT NULL, topic TEXT NOT NULL, first_block INTEGER NOT NULL, count INTEGER NOT NULL,
   PRIMARY KEY (address, topic));
+-- Every Sync as a state transition with reserves BEFORE and AFTER
+-- (before = previous Sync of the pool, or the seed for its first Sync).
+CREATE VIEW IF NOT EXISTS v2_transitions AS
+  SELECT s.block_number, s.tx_index, s.tx_hash, s.log_index, s.pool, p.token0, p.token1,
+         COALESCE(LAG(s.reserve0) OVER w, sd.reserve0) AS reserve0_before,
+         COALESCE(LAG(s.reserve1) OVER w, sd.reserve1) AS reserve1_before,
+         s.reserve0 AS reserve0_after, s.reserve1 AS reserve1_after,
+         b.hash AS block_hash, b.parent_hash, b.timestamp AS block_timestamp
+  FROM v2_sync s
+  JOIN pools p ON p.address = s.pool
+  LEFT JOIN v2_seed sd ON sd.pool = s.pool
+  LEFT JOIN blocks b ON b.number = s.block_number
+  WINDOW w AS (PARTITION BY s.pool ORDER BY s.block_number, s.log_index);
 CREATE TABLE IF NOT EXISTS blocks (
   number INTEGER PRIMARY KEY, hash TEXT NOT NULL, parent_hash TEXT NOT NULL, timestamp INTEGER NOT NULL,
   base_fee_wei TEXT, gas_limit INTEGER NOT NULL, gas_used INTEGER NOT NULL, tx_count INTEGER NOT NULL,
@@ -57,7 +70,7 @@ CREATE TABLE IF NOT EXISTS transactions (
   gas_price TEXT, max_fee TEXT, max_priority_fee TEXT, selector TEXT,
   status INTEGER NOT NULL, gas_used INTEGER NOT NULL, effective_gas_price TEXT NOT NULL,
   PRIMARY KEY (block_number, tx_index));
-`
+` + scanSchema
 
 type Store struct{ DB *sql.DB }
 

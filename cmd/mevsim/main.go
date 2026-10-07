@@ -21,6 +21,7 @@ func usage() {
   mevsim reserves --pool 0x.. --block N [--tx-index i]
   mevsim db-stats | db-hash                        inspect / fingerprint the database
   mevsim devnet [--port 8545]                      local fake node for trying the pipeline
+  mevsim scan --db F [--max-hops 3] [...]          historical arbitrage scan + report
   mevsim status                                    what is implemented / not
   mevsim replay ...                                NOT IMPLEMENTED (Phase 3)`)
 	os.Exit(2)
@@ -52,6 +53,8 @@ func main() {
 		os.Exit(cmdHash(os.Args[2:]))
 	case "devnet":
 		os.Exit(cmdDevnet(os.Args[2:]))
+	case "scan":
+		os.Exit(cmdScan(os.Args[2:]))
 	case "status":
 		printStatus()
 	case "replay":
@@ -179,12 +182,15 @@ func printStatus() {
 		{"Historical ingestion (pools, Sync/Swap, blocks, txs, receipts)", "IMPLEMENTED (Phase 2) - validate on real RPC"},
 		{"V2 reserves at any (block, txIndex)", "IMPLEMENTED (Phase 2) - exact via Sync replay"},
 		{"Validation vs archive getReserves()", "IMPLEMENTED (Phase 2)"},
-		{"Historical replay --start/--end", "NOT IMPLEMENTED (Phase 3)"},
-		{"ETH/USD at block", "NOT IMPLEMENTED (Phase 3)"},
-		{"Cycle search (graph, multi-hop)", "NOT IMPLEMENTED (Phase 3); engine already supports N hops"},
+		{"Historical replay --start/--end", "IMPLEMENTED as `scan` (Phase 3)"},
+		{"ETH/USD at block", "RECONSTRUCTED from V2 USDC/WETH pool (Phase 3)"},
+		{"Cycle search (graph, multi-hop, canonical routes)", "IMPLEMENTED (Phase 3)"},
+		{"Historical arbitrage scanner + report", "IMPLEMENTED (Phase 3) - V2 universe only"},
+		{"On-chain arbitrage detection + exact replay", "IMPLEMENTED (Phase 3)"},
 		{"Gas measured on fork / real-tx validation", "NOT IMPLEMENTED (Phase 4)"},
-		{"Competition model", "NOT IMPLEMENTED (Phase 5)"},
-		{"Daily P&L, distributions, $100K/month analysis", "NOT IMPLEMENTED (Phase 5)"},
+		{"Competition model", "NOT IMPLEMENTED (Phase 5); observed closures reported"},
+		{"Distributions, concentration, $100K/month analysis", "IMPLEMENTED in scan report (Phase 3); needs a long sample"},
+		{"Daily P&L of an executed strategy", "NOT IMPLEMENTED (needs competition model)"},
 		{"Monte Carlo", "NOT IMPLEMENTED (Phase 6, only after replay works)"},
 	}
 	for _, r := range rows {

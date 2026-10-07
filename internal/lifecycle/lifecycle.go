@@ -20,6 +20,25 @@ const (
 
 var order = []Stage{Detected, Simulated, Profitable, EconomicallyValid, ExecutionFeasible, CompetitionFilter, HistoricalResult}
 
+// Scanner stages (Phase 3). Each one removes exactly one cost or check.
+const (
+	GrossProfitable     Stage = "GROSS_PROFITABLE"
+	FlashLoanProfitable Stage = "FLASH_LOAN_PROFITABLE"
+	GasProfitable       Stage = "GAS_PROFITABLE"
+)
+
+var ScanOrder = []Stage{Detected, Simulated, GrossProfitable, FlashLoanProfitable, GasProfitable, EconomicallyValid, ExecutionFeasible}
+
+// Rank is the position of s in ScanOrder (-1 if absent).
+func Rank(s Stage) int {
+	for i, x := range ScanOrder {
+		if x == s {
+			return i
+		}
+	}
+	return -1
+}
+
 type Reason string
 
 const (
@@ -35,6 +54,16 @@ const (
 	FlashLiquidityUnknown       Reason = "flash_liquidity_unknown"
 	ExceedsBlockGasLimit        Reason = "exceeds_block_gas_limit"
 	NoPriceSource               Reason = "no_price_source"
+
+	// scanner reasons
+	UnsupportedTokenBehavior      Reason = "unsupported_token_behavior"
+	NumericalConstraint           Reason = "numerical_constraint"
+	GasExceedsProfit              Reason = "gas_exceeds_profit"
+	GasModelUnavailable           Reason = "gas_model_unavailable"
+	BuilderPaymentExceedsProfit   Reason = "builder_payment_exceeds_profit"
+	InsufficientLiquidity         Reason = "insufficient_liquidity"
+	FlashFeeExceedsProfit         Reason = "flash_fee_exceeds_profit"
+	CompetitionAdjustmentNegative Reason = "competition_adjustment_negative" // reserved: competition not modeled
 )
 
 type Transition struct {
@@ -47,10 +76,14 @@ type Tracker struct {
 	Stage   Stage
 	Reason  Reason
 	History []Transition
+	order   []Stage
 }
 
-func New() *Tracker {
-	return &Tracker{Stage: Detected, History: []Transition{{To: Detected}}}
+func New() *Tracker { return NewWithOrder(order) }
+
+// NewWithOrder starts a tracker at ord[0] that may only advance along ord.
+func NewWithOrder(ord []Stage) *Tracker {
+	return &Tracker{Stage: ord[0], History: []Transition{{To: ord[0]}}, order: ord}
 }
 
 // Advance moves exactly one stage forward; skipping stages is a bug.
@@ -58,8 +91,8 @@ func (t *Tracker) Advance(to Stage, detail string) error {
 	if t.Stage == Rejected {
 		return fmt.Errorf("cannot advance a rejected candidate")
 	}
-	for i, s := range order {
-		if s == t.Stage && i+1 < len(order) && order[i+1] == to {
+	for i, s := range t.order {
+		if s == t.Stage && i+1 < len(t.order) && t.order[i+1] == to {
 			t.Stage = to
 			t.History = append(t.History, Transition{To: to, Detail: detail})
 			return nil

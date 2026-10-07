@@ -25,6 +25,8 @@ import (
 	"github.com/dumidu/mev-sim/internal/amm"
 	"github.com/dumidu/mev-sim/internal/eth"
 	"github.com/dumidu/mev-sim/internal/keccak"
+	"github.com/dumidu/mev-sim/internal/optimize"
+	"github.com/dumidu/mev-sim/internal/route"
 	"github.com/dumidu/mev-sim/internal/uniswapv2"
 )
 
@@ -90,8 +92,62 @@ type Chain struct {
 	ThrottleHTTPEvery int // HTTP 429 (+ Retry-After: 0)
 	ThrottleJSONEvery int // HTTP 200 + JSON error code 429 "compute units"
 	requests          int
+	// ArbTxs: txs executed by the built-in arbitrage bot (ground truth).
+	ArbTxs []string
 	// MinLogFrom is the smallest fromBlock any eth_getLogs asked for.
 	MinLogFrom uint64
+}
+
+// FoTToken charges 1% on every transfer between contracts.
+var FoTToken = addr(0xA5)
+
+// Anchor is the devnet's "WETH".
+var Anchor = addr(0xA1)
+
+type arbPlan struct {
+	p, q *pool
+	in   *big.Int
+}
+
+// bestArb: the most profitable 2-pool cycle anchor -> X -> anchor over live
+// twin pools, sized with the exact integer optimiser (no FoT tokens).
+func bestArb(live []*pool, anchor string) *arbPlan {
+	var best *arbPlan
+	var bestProfit *big.Int
+	for _, p := range live {
+		for _, q := range live {
+			if p == q || p.t0 != q.t0 || p.t1 != q.t1 || (p.t0 != anchor && p.t1 != anchor) {
+				continue
+			}
+			other := p.t1
+			if other == anchor {
+				other = p.t0
+			}
+			if other == FoTToken {
+				continue
+			}
+			pa, _ := amm.NewV2Pool("p", amm.Address(p.t0), amm.Address(p.t1), p.r0, p.r1, p.fee, "x")
+			qa, _ := amm.NewV2Pool("q", amm.Address(q.t0), amm.Address(q.t1), q.r0, q.r1, q.fee, "x")
+			st := route.State{"p": pa, "q": qa}
+			rt := route.Route{Hops: []route.Hop{route.H("p", amm.Address(anchor), amm.Address(other)), route.H("q", amm.Address(other), amm.Address(anchor))}}
+			f := func(L *big.Int) (*big.Int, error) {
+				res, err := route.Simulate(st, rt, L)
+				if err != nil {
+					return nil, err
+				}
+				return new(big.Int).Sub(res.AmountOut, L), nil
+			}
+			ain := p.r0
+			if p.t1 == anchor {
+				ain = p.r1
+			}
+			pt, _ := optimize.Maximize(f, big.NewInt(1), ain)
+			if pt.Profit != nil && pt.Profit.Cmp(big.NewInt(1e12)) > 0 && (bestProfit == nil || pt.Profit.Cmp(bestProfit) > 0) {
+				best, bestProfit = &arbPlan{p, q, pt.L}, pt.Profit
+			}
+		}
+	}
+	return best
 }
 
 // ForkFactory is the factory of the untracked "other fork" pool.
@@ -168,15 +224,15 @@ func Generate(cfg GenConfig) *Chain {
 		sync := func(r *eth.Receipt, p *pool) {
 			emit(r, p.addr, []string{uniswapv2.TopicSync}, uniswapv2.EncodeSync(p.r0, p.r1))
 		}
-		swap := func(r *eth.Receipt, p *pool, zeroForOne bool, under bool) {
+		// swapAmt: `in` is what the pool RECEIVED; output goes to `to`.
+		swapAmt := func(r *eth.Receipt, p *pool, zeroForOne bool, in *big.Int, under bool, to string) *big.Int {
 			rin, rout := p.r0, p.r1
 			if !zeroForOne {
 				rin, rout = p.r1, p.r0
 			}
-			in := new(big.Int).Quo(new(big.Int).Mul(rin, big.NewInt(1+rng.Int63n(300))), big.NewInt(10000))
 			out, err := amm.GetAmountOut(in, rin, rout, p.fee)
 			if err != nil || out.Sign() == 0 {
-				return
+				return nil
 			}
 			if under && out.Cmp(big.NewInt(1000)) > 0 {
 				out.Sub(out, big.NewInt(1+rng.Int63n(999)))
@@ -199,8 +255,24 @@ func Generate(cfg GenConfig) *Chain {
 				a0i, a1i, a0o, a1o = z, in, out, z
 			}
 			sync(r, p) // contract order: _update (Sync) then emit Swap
-			emit(r, p.addr, []string{uniswapv2.TopicSwap, uniswapv2.AddrTopic(addr(0x7777)), uniswapv2.AddrTopic(addr(0xE001))},
+			emit(r, p.addr, []string{uniswapv2.TopicSwap, uniswapv2.AddrTopic(addr(0x7777)), uniswapv2.AddrTopic(to)},
 				uniswapv2.EncodeSwap(a0i, a1i, a0o, a1o))
+			return out
+		}
+		swap := func(r *eth.Receipt, p *pool, zeroForOne bool, under bool) {
+			rin := p.r0
+			if !zeroForOne {
+				rin = p.r1
+			}
+			in := new(big.Int).Quo(new(big.Int).Mul(rin, big.NewInt(1+rng.Int63n(300))), big.NewInt(10000))
+			swapAmt(r, p, zeroForOne, in, under, addr(0xE001))
+		}
+		// received: what arrives when `amt` of token t moves between contracts
+		received := func(t string, amt *big.Int) *big.Int {
+			if t == FoTToken {
+				return new(big.Int).Quo(new(big.Int).Mul(amt, big.NewInt(99)), big.NewInt(100))
+			}
+			return new(big.Int).Set(amt)
 		}
 
 		// 1. pair creations (+ initial mint in a separate tx)
@@ -210,7 +282,15 @@ func Generate(cfg GenConfig) *Chain {
 			if j >= i {
 				j++
 			}
+			if len(pools)%4 == 0 { // every other pair includes the anchor ("WETH")
+				i, j = 0, 1+rng.Intn(len(tokens)-1)
+			}
 			t0, t1 := tokens[i], tokens[j]
+			var twin *pool
+			if len(pools)%2 == 1 { // same pair on the other factory -> 2-hop cycles
+				twin = pools[len(pools)-1]
+				t0, t1 = twin.t0, twin.t1
+			}
 			if t0 > t1 {
 				t0, t1 = t1, t0
 			}
@@ -227,6 +307,10 @@ func Generate(cfg GenConfig) *Chain {
 			_, r = newTx()
 			p.r0 = e18(int64(100 + rng.Intn(10_000)))
 			p.r1 = e18(int64(100 + rng.Intn(10_000)))
+			if twin != nil && twin.r0.Sign() > 0 { // twin starts within +-3% of the other price
+				p.r1 = new(big.Int).Quo(new(big.Int).Mul(p.r0, twin.r1), twin.r0)
+				p.r1.Mul(p.r1, big.NewInt(97+rng.Int63n(7))).Quo(p.r1, big.NewInt(100))
+			}
 			transfer(r, t0, p.r0)
 			transfer(r, t1, p.r1)
 			sync(r, p)
@@ -253,12 +337,45 @@ func Generate(cfg GenConfig) *Chain {
 				p.r0 = new(big.Int).Add(p.r0, big.NewInt(rng.Int63n(1e15)+1))
 				transfer(r, p.t0, big.NewInt(1))
 				sync(r, p)
-			case 1, 2: // multi-hop in one tx
-				for h := 0; h < 2; h++ {
-					swap(r, live[rng.Intn(len(live))], rng.Intn(2) == 0, false)
+			case 1, 2: // router multi-hop: pool1 sends straight to pool2
+				p1 := live[rng.Intn(len(live))]
+				z1 := rng.Intn(2) == 0
+				mid := p1.t1
+				if !z1 {
+					mid = p1.t0
+				}
+				var p2 *pool
+				for _, q := range live {
+					if q != p1 && (q.t0 == mid || q.t1 == mid) {
+						p2 = q
+						break
+					}
+				}
+				rin := p1.r0
+				if !z1 {
+					rin = p1.r1
+				}
+				in := new(big.Int).Quo(new(big.Int).Mul(rin, big.NewInt(1+rng.Int63n(200))), big.NewInt(10000))
+				if p2 == nil {
+					swapAmt(r, p1, z1, in, false, addr(0xE001))
+					break
+				}
+				out := swapAmt(r, p1, z1, in, false, p2.addr)
+				if out != nil {
+					swapAmt(r, p2, p2.t0 == mid, received(mid, out), false, addr(0xE001))
 				}
 			default:
 				swap(r, live[rng.Intn(len(live))], rng.Intn(2) == 0, rng.Intn(4) == 0)
+			}
+		}
+		if rng.Intn(2) == 0 {
+			if b := bestArb(live, tokens[0]); b != nil {
+				_, r := newTx()
+				out := swapAmt(r, b.p, b.p.t0 == tokens[0], b.in, false, b.q.addr)
+				if out != nil {
+					swapAmt(r, b.q, b.q.t0 != tokens[0], out, false, addr(0xB07))
+				}
+				c.ArbTxs = append(c.ArbTxs, r.TxHash)
 			}
 		}
 		if unknown != nil && rng.Intn(3) == 0 {

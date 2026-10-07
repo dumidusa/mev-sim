@@ -30,5 +30,14 @@ export MEVSIM_RPC_URL="https://eth-mainnet.g.alchemy.com/v2/<KEY>"
 Design: `docs/PHASE2_DESIGN.md`. Build needs CGO (SQLite): on Mac run
 `xcode-select --install` once.
 
-**Current phase: 2 done in code, awaiting a mainnet validation run.**
-No historical profit results exist yet.
+## Phase 3: historical arbitrage scanner
+
+```
+./bin/mevsim scan --db data/mainnet-test.db --max-hops 3 --flash-liquidity auto
+```
+
+Design: `docs/SCANNER_DESIGN.md`. Report saved to `data/reports/<run>.txt`;
+every row in `scan_*` tables. Results describe **historically observed
+opportunity within the modeled V2 universe**, not all Ethereum MEV.
+
+**Current phase: 3 done in code (devnet-validated); mainnet scan pending.**
