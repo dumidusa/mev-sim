@@ -78,6 +78,8 @@ type Config struct {
 	USDPool         string
 	USDToken        string
 	USDDecimals     int
+	Workers         int               // parallel route evaluations per point (results identical for any value)
+	Progress        func(line string) // optional progress output
 }
 
 type HopDetail struct {

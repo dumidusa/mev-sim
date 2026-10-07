@@ -243,6 +243,15 @@ func TestScanDeterministic(t *testing.T) {
 	if a.ResultsHash() != b.ResultsHash() {
 		t.Fatal("two scans of the same data differ")
 	}
+	par := baseCfg()
+	par.Workers = 8
+	pr, err := Run(f.st, par)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pr.ResultsHash() != a.ResultsHash() {
+		t.Fatal("8 workers gave different results than 1 worker")
+	}
 	c := baseCfg()
 	c.BuilderShareBps = 9000
 	x, _ := Run(f.st, c)

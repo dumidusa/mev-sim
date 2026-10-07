@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"math/big"
 	"sort"
+	"sync"
+	"time"
 
 	"github.com/dumidu/mev-sim/internal/amm"
 	"github.com/dumidu/mev-sim/internal/graph"
@@ -153,6 +155,12 @@ func Run(st *store.Store, cfg Config) (*Result, error) {
 		return nil, fmt.Errorf("scan range %d..%d outside ingested range %d..%d", cfg.Start, cfg.End, dbStart, done)
 	}
 
+	say := func(f string, a ...any) {
+		if cfg.Progress != nil {
+			cfg.Progress(fmt.Sprintf(f, a...))
+		}
+	}
+	say("loading swaps (token behaviour + on-chain arbitrage detection)...")
 	// --- observed history: swaps, token behaviour, on-chain arbitrage ---
 	txs, err := histarb.Load(st, cfg.Start, cfg.End)
 	if err != nil {
@@ -216,6 +224,8 @@ func Run(st *store.Store, cfg Config) (*Result, error) {
 	}
 	s.set = graph.Build(edges, graph.Config{Anchors: []string{cfg.Anchor}, MaxHops: cfg.MaxHops, MaxRoutes: cfg.MaxRoutes})
 	s.res.Set = s.set
+	say("routes: %d enumerated (%v by hops), %d of %d pools on a cycle", len(s.set.Routes), s.set.Stats.RoutesByHops,
+		s.set.Stats.PoolsInCore, s.set.Stats.PoolsTotal)
 	s.routeByID = map[string]int{}
 	for i, r := range s.set.Routes {
 		s.routeByID[r.RouteID] = i
@@ -250,6 +260,7 @@ func Run(st *store.Store, cfg Config) (*Result, error) {
 		}
 	}
 
+	say("evaluating start state (all routes)...")
 	// --- scan ---
 	s.initial = Point{cfg.Start, -1}
 	s.topOfBlock(cfg.Start, cfg.Start)
@@ -264,6 +275,18 @@ func Run(st *store.Store, cfg Config) (*Result, error) {
 
 	var cur *[2]uint64
 	var curHash string
+	t0, lastLog := time.Now(), time.Now()
+	progress := func(b uint64) {
+		if cfg.Progress == nil || time.Since(lastLog) < 10*time.Second {
+			return
+		}
+		lastLog = time.Now()
+		done := float64(b-cfg.Start+1) / float64(cfg.End-cfg.Start+1)
+		eta := time.Duration(float64(time.Since(t0)) * (1 - done) / done)
+		cfg.Progress(fmt.Sprintf("scan: block %d / %d (%.1f%%)  evaluations %d  candidates %d  episodes %d  elapsed %s  ETA ~%s",
+			b, cfg.End, done*100, s.res.Metrics["route_evaluations"], len(s.res.Cands), len(s.res.Episodes),
+			time.Since(t0).Round(time.Second), eta.Round(time.Second)))
+	}
 	changed := map[string]bool{}
 	curBlock := cfg.Start
 	flush := func() error {
@@ -302,6 +325,7 @@ func Run(st *store.Store, cfg Config) (*Result, error) {
 			if k.Block > curBlock {
 				s.topOfBlock(k.Block, curBlock+1)
 				curBlock = k.Block
+				progress(curBlock)
 			}
 			cur, curHash = &key, k.TxHash
 			if arbs, ok := s.arbsByTx[key]; ok {
@@ -381,8 +405,22 @@ func (s *scanner) ethUSD() *big.Rat {
 	return new(big.Rat).SetFrac(new(big.Int).Mul(usd, scale), weth)
 }
 
+type job struct {
+	ri  int
+	fp  string
+	c   *Candidate
+	err error
+}
+
+// scanPoint evaluates routes in three phases so the result is identical for
+// any number of workers:
+//
+//	1 (sequential)  skip inactive / unchanged routes, record fingerprints
+//	2 (parallel)    evaluate: pure reads of the state, private clones only
+//	3 (sequential)  in route order: ids, metrics, episodes
 func (s *scanner) scanPoint(pt Point, trigger string, routes []int, triggerIsArb bool) error {
 	blk := s.res.Blocks[pt.Block]
+	var jobs []job
 	for _, ri := range routes {
 		r := s.set.Routes[ri]
 		if !s.active(r) {
@@ -395,10 +433,40 @@ func (s *scanner) scanPoint(pt Point, trigger string, routes []int, triggerIsArb
 			continue
 		}
 		s.lastFP[ri] = fp
+		jobs = append(jobs, job{ri: ri, fp: fp})
+	}
+	w := s.cfg.Workers
+	if w < 1 {
+		w = 1
+	}
+	if w == 1 || len(jobs) < 4 {
+		for i := range jobs {
+			jobs[i].c, jobs[i].err = s.ev.evaluate(s.state, s.set.Routes[jobs[i].ri], pt, blk)
+		}
+	} else {
+		var wg sync.WaitGroup
+		next := make(chan int, len(jobs))
+		for i := range jobs {
+			next <- i
+		}
+		close(next)
+		for k := 0; k < w && k < len(jobs); k++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				for i := range next {
+					jobs[i].c, jobs[i].err = s.ev.evaluate(s.state, s.set.Routes[jobs[i].ri], pt, blk)
+				}
+			}()
+		}
+		wg.Wait()
+	}
+	for _, j := range jobs {
+		ri, fp, c := j.ri, j.fp, j.c
+		r := s.set.Routes[ri]
 		s.metric("route_evaluations", 1)
-		c, err := s.ev.evaluate(s.state, r, pt, blk)
-		if err != nil {
-			return fmt.Errorf("route %s at %s: %w", r.RouteID, pt, err)
+		if j.err != nil {
+			return fmt.Errorf("route %s at %s: %w", r.RouteID, pt, j.err)
 		}
 		profitable := false
 		if c == nil {

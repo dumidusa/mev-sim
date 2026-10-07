@@ -9,6 +9,7 @@ import (
 	"math/big"
 	"os"
 	"path/filepath"
+	"runtime"
 	"time"
 
 	"github.com/dumidu/mev-sim/internal/eth"
@@ -40,6 +41,7 @@ func cmdScan(args []string) int {
 	minProfit := fs.String("min-profit-wei", "1", "net profit floor [ASSUMED]")
 	curve := fs.Int("curve-points", 12, "profit-curve samples stored for valid candidates (0 = off)")
 	save := fs.Bool("save", true, "persist results to the db")
+	workers := fs.Int("workers", runtime.NumCPU(), "CPU cores for route evaluation (results identical for any value)")
 	fs.Parse(args)
 
 	st, err := store.Open(*db)
@@ -56,7 +58,8 @@ func cmdScan(args []string) int {
 	}
 
 	cfg := scan.Config{Start: *start, End: *end, MaxHops: *maxHops, MaxRoutes: *maxRoutes,
-		BuilderShareBps: *builder, CurvePoints: *curve}
+		BuilderShareBps: *builder, CurvePoints: *curve, Workers: *workers,
+		Progress: func(l string) { fmt.Fprintln(os.Stderr, "  "+l) }}
 	switch *network {
 	case "mainnet":
 		cfg.Anchor, cfg.USDPool, cfg.USDToken, cfg.USDDecimals = scan.MainnetWETH, scan.MainnetUSDCWETHPair, scan.MainnetUSDC, 6
@@ -128,7 +131,7 @@ func cmdScan(args []string) int {
 	}
 
 	t0 := time.Now()
-	fmt.Fprintf(os.Stderr, "scanning %d..%d (max %d hops)...\n", *start, *end, *maxHops)
+	fmt.Fprintf(os.Stderr, "scanning %d..%d (max %d hops, %d workers)...\n", *start, *end, *maxHops, *workers)
 	res, err := scan.Run(st, cfg)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "scan failed:", err)
