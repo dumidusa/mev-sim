@@ -42,6 +42,8 @@ No "X% accurate". Correctness is shown by tests that can fail.
 | Tokens | fee-on-transfer detected from pool→pool chains; FoT routes never pass DETECTED | — | ✅ devnet |
 | **Arb replay** | on-chain closed cycles detected; per-hop model out == observed out; chained route == observed final | 66/66 bot arbs, 0 wei | ✅ devnet · ⏳ mainnet |
 | **Arb replay** | scanner recognizes each bot arb; scanner optimum ≥ bot gross (up to ≤ hops units) | 66/66; max shortfall 1 wei | ✅ devnet · ⏳ mainnet |
+| BigQuery | BQ-path DB == RPC-path DB, all tables, same range (devnet) | only transactions.selector differs | ✅ devnet · ⏳ mainnet `compare-db` |
+| BigQuery | truncated export / out-of-range request refused | error | ✅ |
 | **Fork** | Execute our route on an anvil fork at block N, tx index i | on-chain out == simulated out | Phase 4 |
 | Regression | Every bug → new test in `testdata/regressions/` | — | ongoing |
 

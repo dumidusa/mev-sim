@@ -30,6 +30,18 @@ export MEVSIM_RPC_URL="https://eth-mainnet.g.alchemy.com/v2/<KEY>"
 Design: `docs/PHASE2_DESIGN.md`. Build needs CGO (SQLite): on Mac run
 `xcode-select --install` once.
 
+## Bulk history from BigQuery (weeks of data, no RPC rate limits)
+
+```
+python3 tools/bq_export.py --project MY_PROJECT --start N --end M --out bq/N-M   # dry-run cost shown first
+./bin/mevsim ingest --bq-dir bq/N-M --db data/X.db --start-block N --end-block M  # RPC only for eth_call
+./bin/mevsim compare-db --a data/rpc.db --b data/X.db --start-block N --end-block M  # prove equivalence
+```
+
+Logs, blocks and receipts come from the export; probes and seeds still use the
+archive RPC. The same validated S1-S5 pipeline runs on top. Only
+`transactions.selector` is missing (no input column exported).
+
 ## Phase 3: historical arbitrage scanner
 
 ```

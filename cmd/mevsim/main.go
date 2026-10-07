@@ -23,6 +23,7 @@ func usage() {
   mevsim devnet [--port 8545]                      local fake node for trying the pipeline
   mevsim scan --db F [--max-hops 3] [...]          historical arbitrage scan + report
   mevsim opps --db F [--top 5]                     inspect top opportunities (+ on-chain balance check)
+  mevsim compare-db --a A --b B --start-block N --end-block M   prove two dbs hold the same data
   mevsim status                                    what is implemented / not
   mevsim replay ...                                NOT IMPLEMENTED (Phase 3)`)
 	os.Exit(2)
@@ -58,6 +59,8 @@ func main() {
 		os.Exit(cmdScan(os.Args[2:]))
 	case "opps":
 		os.Exit(cmdOpps(os.Args[2:]))
+	case "compare-db":
+		os.Exit(cmdCompareDB(os.Args[2:]))
 	case "status":
 		printStatus()
 	case "replay":

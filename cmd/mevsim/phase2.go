@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/dumidu/mev-sim/internal/bqsource"
 	"github.com/dumidu/mev-sim/internal/eth"
 	"github.com/dumidu/mev-sim/internal/ingest"
 	"github.com/dumidu/mev-sim/internal/store"
@@ -58,6 +59,7 @@ func cmdIngest(args []string) int {
 	seed := fs.String("seed", "active", "active | all")
 	workers := fs.Int("workers", 8, "parallel RPC requests")
 	facs := fs.String("factories", "mainnet", "mainnet | devnet")
+	bqDir := fs.String("bq-dir", "", "read logs/blocks/receipts from a BigQuery export (tools/bq_export.py); RPC only for eth_call")
 	fs.Parse(args)
 	factories, chainID := ingest.MainnetFactories, uint64(1)
 	if *facs == "devnet" {
@@ -88,7 +90,20 @@ func cmdIngest(args []string) int {
 		fmt.Printf("rpc: %d requests, %d rate-limited (waited and retried), %d transport retries\n",
 			client.Stats.Requests.Load(), client.Stats.Throttled.Load(), client.Stats.Retried.Load())
 	}()
-	in, err := ingest.New(client, st, ingest.Config{
+	var chain eth.Chain = client
+	if *bqDir != "" {
+		if *txMode != "touching" {
+			log.Fatal("--bq-dir supports --tx-mode touching only (the export holds only touching txs)")
+		}
+		src, err := bqsource.Open(*bqDir, client)
+		if err != nil {
+			log.Fatal(err)
+		}
+		defer src.Close()
+		fmt.Printf("source: BigQuery export %s (%s, blocks %d..%d); eth_call via RPC\n", *bqDir, src.Manifest.Dataset, src.Manifest.Start, src.Manifest.End)
+		chain = src
+	}
+	in, err := ingest.New(chain, st, ingest.Config{
 		Start: *start, End: *end, Factories: factories, ChainID: chainID,
 		Confirmations: *conf, LogSpan: *span, MaxLogSpan: *maxSpan, BlockChunk: *chunk,
 		TxMode: *txMode, SeedMode: *seed, Workers: *workers,
