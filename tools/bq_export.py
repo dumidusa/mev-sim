@@ -44,7 +44,7 @@ WHERE number BETWEEN @s AND @e"""
 
 def sql_blocks(ds):
     return f"""
-SELECT number, `hash` AS hash, parent_hash, UNIX_SECONDS(timestamp) AS timestamp,
+SELECT number, `hash`, parent_hash, UNIX_SECONDS(timestamp) AS timestamp,
        base_fee_per_gas, gas_limit, gas_used, transaction_count, miner
 FROM `{ds}.blocks`
 WHERE timestamp BETWEEN TIMESTAMP_SECONDS(@lo) AND TIMESTAMP_SECONDS(@hi)
@@ -70,7 +70,7 @@ WITH touching AS (
     AND block_number BETWEEN @s AND @e
     AND topics[SAFE_OFFSET(0)] IN ('{TOPIC_SYNC}', '{TOPIC_SWAP}')
 )
-SELECT block_number, transaction_index, `hash` AS hash, from_address, to_address, nonce,
+SELECT block_number, transaction_index, `hash`, from_address, to_address, nonce,
        transaction_type, CAST(value AS STRING) AS value, gas, gas_price,
        max_fee_per_gas, max_priority_fee_per_gas,
        receipt_status, receipt_gas_used, receipt_effective_gas_price
